@@ -1487,7 +1487,7 @@ async function manualEnrich() {
   const before = {};
   AI_FIELDS.forEach(f => { before[f.key] = currentContact[f.key] || ''; });
 
-  await enrichContact(currentContact);
+  await enrichContact(currentContact, true); // true = sovrascrivi sempre
 
   // Mostra i campi aggiornati evidenziando i nuovi
   renderAIFields(currentContact);
@@ -1518,91 +1518,91 @@ async function manualEnrich() {
   setSt(document.getElementById('aiSt'), msg, updated > 0 ? 'ok' : 'warn');
 }
 
-async function enrichContact(contact) {
-  // Estrai sito dal dominio email se non trovato
-  if (!contact.sito && contact.email) {
-    const domain = contact.email.split('@')[1];
-    if (domain) contact.sito = domain;
-  }
+async function enrichContact(contact, forceOverwrite) {
+  // Determina URL del sito da usare (priorità: sito → dominio email)
+  const domain = contact.email ? contact.email.split('@')[1] : '';
+  if (!contact.sito && domain) contact.sito = domain;
+  const siteUrl = contact.sito
+    ? (contact.sito.startsWith('http') ? contact.sito : 'https://' + contact.sito)
+    : '';
 
-  // Usa il dominio email anche per la query se azienda non c'è
-  const queryParts = [contact.azienda, contact.nome].filter(Boolean);
-  if (!queryParts.length && contact.email) queryParts.push(contact.email.split('@')[1]?.split('.')[0]);
-  const query = queryParts.join(' ').trim();
+  // Query per ricerche
+  const query = [contact.azienda, domain?.split('.')[0]].filter(Boolean).join(' ');
 
-  // Deduce settore anche dal dominio email
-  if (!contact.settore && contact.email) {
-    contact.settore = guessSector(contact.email + ' ' + (contact.sito||''));
-  }
-  if (!query) return;
+  console.log('Enriching:', query, '| site:', siteUrl);
 
-  console.log('Enriching with query:', query);
+  // ── 1. SITO AZIENDALE (fonte migliore per aziende piccole italiane) ──
+  if (siteUrl) {
+    const fetched = await fetchSite(siteUrl);
+    if (fetched) {
+      const h = fetched;
+      // Descrizione meta
+      const desc = h.match(/content=["']([^"']{30,400})["'][^>]*name=["']description["']/i)?.[1]
+                || h.match(/name=["']description["'][^>]*content=["']([^"']{30,400})["']/i)?.[1]
+                || h.match(/<meta[^>]+og:description[^>]+content=["']([^"']{30,400})["']/i)?.[1];
+      if (desc && (forceOverwrite || !contact.note)) contact.note = desc.replace(/\s+/g,' ').trim();
 
-  // ── 1. DuckDuckGo Instant Answer ──
-  try {
-    const ddUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
-    const dd = await (await fetch(ddUrl)).json();
-
-    if (dd.AbstractText?.length > 20 && !contact.note)
-      contact.note = dd.AbstractText.slice(0, 300);
-    if (!contact.sito && dd.AbstractURL)
-      contact.sito = dd.AbstractURL.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    if (!contact.settore && dd.AbstractText)
-      contact.settore = guessSector(dd.AbstractText);
-    if (dd.Infobox?.content) {
-      for (const item of dd.Infobox.content) {
-        if (/address|sede|headquarters/i.test(item.label) && !contact.indirizzo)
-          contact.indirizzo = item.value;
-        if (/phone|telefono/i.test(item.label) && !contact.telefono)
-          contact.telefono = item.value;
-        if (/industry|settore|sector/i.test(item.label) && !contact.settore)
-          contact.settore = item.value;
+      // Nome azienda dal title
+      const title = h.match(/<title>([^<]{3,80})<\/title>/i)?.[1];
+      if (title && (forceOverwrite || !contact.azienda)) {
+        contact.azienda = title.split(/[\|\-–·]/)[0].trim();
       }
-    }
-  } catch(e) { console.log('DDG failed:', e.message); }
 
-  // ── 2. Wikipedia IT ──
-  if (!contact.note && contact.azienda) {
+      // Telefono (cerca pattern italiani nel HTML)
+      const tel = h.match(/(?:tel[:\s]*)?(\+39[\s\-]?)?(?:0\d{1,4}[\s\-]?\d{5,8}|\d{3}[\s\-]?\d{3}[\s\-]?\d{4})/i)?.[0];
+      if (tel && (forceOverwrite || !contact.telefono)) contact.telefono = tel.replace(/tel[:\s]*/i,'').trim();
+
+      // Indirizzo (cerca Via/Corso/Piazza seguito da CAP)
+      const addr = h.match(/(?:Via|Viale|Corso|Piazza|Str\.|Loc\.)\s+[A-Za-zÀ-ÿ\s,\.0-9]{3,50}(?:\d{5}|\(\w{2}\))/i)?.[0];
+      if (addr && (forceOverwrite || !contact.indirizzo)) contact.indirizzo = addr.replace(/\s+/g,' ').trim();
+
+      // Email dalla homepage (più affidabile dell'OCR)
+      const emailOnSite = h.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/)?.[0];
+      if (emailOnSite && emailOnSite !== contact.email && (forceOverwrite || !contact.email))
+        contact.email = emailOnSite;
+
+      // Settore dal contenuto
+      if (forceOverwrite || !contact.settore)
+        contact.settore = guessSector(h.slice(0, 8000));
+    }
+  }
+
+  // ── 2. Wikipedia (per aziende grandi) ──
+  if ((forceOverwrite || !contact.note) && contact.azienda) {
     try {
-      const wUrl = `https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(contact.azienda)}`;
-      const wResp = await fetch(wUrl);
-      if (wResp.ok) {
-        const wiki = await wResp.json();
-        if (wiki.extract?.length > 30) {
-          contact.note = wiki.extract.slice(0, 300);
-          if (!contact.settore) contact.settore = guessSector(wiki.extract);
+      const r = await fetch(`https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(contact.azienda)}`);
+      if (r.ok) {
+        const w = await r.json();
+        if (w.extract?.length > 40) {
+          if (forceOverwrite || !contact.note) contact.note = w.extract.slice(0,300);
+          if (forceOverwrite || !contact.settore) contact.settore = guessSector(w.extract);
         }
       }
-    } catch(e) { console.log('Wiki failed:', e.message); }
+    } catch(e) {}
   }
 
-  // ── 3. Sito web → leggi description ──
-  const sito = contact.sito || (contact.email ? 'https://' + contact.email.split('@')[1] : '');
-  if (sito && !contact.note) {
+  // ── 3. Settore dal dominio email se ancora mancante ──
+  if (!contact.settore)
+    contact.settore = guessSector((contact.sito||'') + ' ' + (contact.email||'') + ' ' + (contact.azienda||''));
+}
+
+// Scarica HTML del sito tramite proxy CORS (prova 3 proxy in cascata)
+async function fetchSite(url) {
+  const proxies = [
+    u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
+    u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+  ];
+  for (const makeUrl of proxies) {
     try {
-      const url = sito.startsWith('http') ? sito : 'https://' + sito;
-      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const pData = await (await fetch(proxy, { signal: AbortSignal.timeout(6000) })).json();
-      const html = pData.contents || '';
-      // Descrizione
-      const desc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{20,300})["']/i)
-                || html.match(/<meta[^>]+content=["']([^"']{20,300})["'][^>]+name=["']description["']/i);
-      if (desc && !contact.note) contact.note = desc[1];
-      // Titolo pagina se ancora niente
-      const title = html.match(/<title>([^<]{3,80})<\/title>/i);
-      if (title && !contact.azienda) {
-        contact.azienda = title[1].split(/[\|\-–]/)[0].trim();
-      }
-      // Telefono dalla homepage
-      const tel = html.match(/(?:\+39\s?)?\d[\d\s\-\.]{7,15}\d/);
-      if (tel && !contact.telefono) contact.telefono = tel[0].trim();
-      // Indirizzo dalla homepage
-      const addr = html.match(/(?:Via|Viale|Corso|Piazza|Str\.)\s[A-Za-zÀ-ÿ\s,0-9\.]+\d{5}/i);
-      if (addr && !contact.indirizzo) contact.indirizzo = addr[0].trim();
-      // Settore
-      if (!contact.settore) contact.settore = guessSector(html.slice(0, 5000));
-    } catch(e) { console.log('Site failed:', e.message); }
+      const resp = await fetch(makeUrl(url), { signal: AbortSignal.timeout(7000) });
+      if (!resp.ok) continue;
+      const data = await resp.json().catch(() => null);
+      const html = data?.contents || await resp.text().catch(() => '');
+      if (html && html.length > 100) { console.log('Proxy OK, html len:', html.length); return html; }
+    } catch(e) { console.log('Proxy failed:', e.message); }
   }
+  return null;
 }
 
 function renderAIFields(contact) {
