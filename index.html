@@ -3,66 +3,75 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>CardScan — Biglietti da Visita</title>
+  <title>CardScan</title>
   <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="cvScriptLoaded()"></script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --bg: #08090d; --surface: #0f1018; --surface2: #161820;
-      --border: #252635; --accent: #3df5c1; --accent-dim: rgba(61,245,193,0.15);
-      --warn: #f5a53d; --text: #dde0f0; --text-dim: #585a70;
-      --font: 'Courier New', 'Lucida Console', monospace;
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#08090d;--surf:#0f1018;--surf2:#161820;
+      --border:#252635;--accent:#3df5c1;--adim:rgba(61,245,193,.15);
+      --warn:#f5a53d;--text:#dde0f0;--dim:#585a70;
+      --font:'Courier New',monospace;
     }
-    html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); -webkit-font-smoothing: antialiased; touch-action: none; }
+    html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font);touch-action:none;-webkit-font-smoothing:antialiased}
 
-    /* LOADING */
-    #loading { position: fixed; inset: 0; z-index: 200; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; }
-    #loading.hide { display: none; }
-    .logo { font-size: 22px; font-weight: 700; letter-spacing: 8px; color: var(--accent); }
-    .logo span { color: var(--text-dim); }
-    .spinner { width: 36px; height: 36px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .load-label { font-size: 11px; color: var(--text-dim); letter-spacing: 3px; }
+    /* ── LOADING ── */
+    #loading{position:fixed;inset:0;z-index:300;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px}
+    #loading.hide{display:none}
+    .logo{font-size:22px;font-weight:700;letter-spacing:8px;color:var(--accent)}
+    .logo span{color:var(--dim)}
+    .spin{width:36px;height:36px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .9s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .lbl{font-size:11px;color:var(--dim);letter-spacing:3px}
 
-    /* SCAN */
-    #scanScreen { display: flex; flex-direction: column; height: 100vh; }
-    #scanScreen.hide { display: none; }
-    .hdr { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--surface); }
-    .hdr-logo { font-size: 16px; letter-spacing: 6px; color: var(--accent); }
-    .hdr-step { font-size: 11px; letter-spacing: 2px; color: var(--text-dim); padding: 4px 10px; border: 1px solid var(--border); }
+    /* ── SCHERMI ── */
+    .screen{display:flex;flex-direction:column;height:100vh}
+    .screen.hide{display:none}
+    .hdr{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surf)}
+    .hdr-logo{font-size:16px;letter-spacing:6px;color:var(--accent)}
+    .hdr-tag{font-size:11px;letter-spacing:2px;color:var(--dim);padding:4px 10px;border:1px solid var(--border)}
+    .hdr-tag.ok{color:var(--accent);border-color:var(--accent)}
 
-    .cam-wrap { position: relative; flex: 1; overflow: hidden; background: #000; }
-    #video { width: 100%; height: 100%; object-fit: cover; display: block; }
-    #overlay { position: absolute; inset: 0; touch-action: none; }
+    /* ── CAMERA ── */
+    .cam-wrap{position:relative;flex:1;overflow:hidden;background:#000}
+    #video{width:100%;height:100%;object-fit:cover;display:block}
+    /* guide corners statici */
+    .guide{position:absolute;inset:12%;pointer-events:none}
+    .guide::before,.guide::after,.guide i::before,.guide i::after{content:'';position:absolute;width:22px;height:22px;border-color:rgba(255,255,255,.25);border-style:solid}
+    .guide::before{top:0;left:0;border-width:2px 0 0 2px}
+    .guide::after{top:0;right:0;border-width:2px 2px 0 0}
+    .guide i::before{bottom:0;left:0;border-width:0 0 2px 2px}
+    .guide i::after{bottom:0;right:0;border-width:0 2px 2px 0}
 
-    .badge { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); font-size: 11px; letter-spacing: 3px; padding: 5px 14px; background: var(--accent-dim); border: 1px solid var(--accent); color: var(--accent); opacity: 0; transition: opacity .3s; pointer-events: none; }
-    .badge.show { opacity: 1; }
+    /* ── PANEL ── */
+    .panel{flex-shrink:0;background:var(--surf);border-top:1px solid var(--border);padding:14px 18px max(18px,env(safe-area-inset-bottom))}
+    .thumbs{display:flex;gap:12px;margin-bottom:12px}
+    .tw{flex:1}
+    .tb{height:52px;background:var(--bg);border:1px solid var(--border);overflow:hidden;display:flex;align-items:center;justify-content:center;transition:border-color .3s}
+    .tb.done{border-color:var(--accent)}
+    .tb img{width:100%;height:100%;object-fit:cover}
+    .tb .ph{font-size:10px;letter-spacing:2px;color:var(--dim)}
+    .tlbl{font-size:10px;letter-spacing:2px;color:var(--dim);text-align:center;margin-top:4px}
+    .st{font-size:12px;letter-spacing:1px;color:var(--dim);text-align:center;min-height:18px;margin-bottom:12px;transition:color .3s}
+    .st.ok{color:var(--accent)} .st.warn{color:var(--warn)}
+    .btn{display:block;width:100%;padding:14px 20px;background:transparent;border:1px solid var(--accent);color:var(--accent);font-family:var(--font);font-size:13px;letter-spacing:4px;cursor:pointer;transition:background .2s,color .2s;-webkit-tap-highlight-color:transparent;margin-bottom:8px}
+    .btn:last-child{margin-bottom:0}
+    .btn:active,.btn:hover{background:var(--accent);color:var(--bg)}
+    .btn.sec{border-color:var(--dim);color:var(--dim)}
+    .btn.sec:active,.btn.sec:hover{background:var(--dim);color:var(--bg)}
+    .btn.danger{border-color:var(--warn);color:var(--warn)}
+    .btn.danger:active,.btn.danger:hover{background:var(--warn);color:var(--bg)}
 
-    /* panel */
-    .panel { flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 14px 18px max(18px, env(safe-area-inset-bottom)); }
-    .thumbs { display: flex; gap: 12px; margin-bottom: 12px; }
-    .thumb-wrap { flex: 1; }
-    .thumb-box { height: 52px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; display: flex; align-items: center; justify-content: center; transition: border-color .3s; }
-    .thumb-box.done { border-color: var(--accent); }
-    .thumb-box img { width: 100%; height: 100%; object-fit: cover; }
-    .thumb-box .ph { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); }
-    .thumb-lbl { font-size: 10px; letter-spacing: 2px; color: var(--text-dim); text-align: center; margin-top: 4px; }
-    .status { font-size: 12px; letter-spacing: 1px; color: var(--text-dim); text-align: center; min-height: 18px; margin-bottom: 12px; transition: color .3s; }
-    .status.ok   { color: var(--accent); }
-    .status.warn { color: var(--warn); }
-    .btn { display: block; width: 100%; padding: 14px 20px; background: transparent; border: 1px solid var(--accent); color: var(--accent); font-family: var(--font); font-size: 13px; letter-spacing: 4px; cursor: pointer; transition: background .2s, color .2s; -webkit-tap-highlight-color: transparent; margin-bottom: 8px; }
-    .btn:last-child { margin-bottom: 0; }
-    .btn:not(:disabled):active, .btn:not(:disabled):hover { background: var(--accent); color: var(--bg); }
-    .btn.sec { border-color: var(--text-dim); color: var(--text-dim); }
-    .btn.sec:not(:disabled):active, .btn.sec:not(:disabled):hover { background: var(--text-dim); color: var(--bg); }
+    /* ── ADJUST SCREEN ── */
+    #adjustScreen .cam-wrap{position:relative}
+    #frozenImg{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+    #adjOverlay{position:absolute;inset:0;touch-action:none}
 
-    /* RESULT */
-    #resultScreen { display: flex; flex-direction: column; height: 100vh; }
-    #resultScreen.hide { display: none; }
-    .result-area { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; background: var(--surface2); padding: 20px; }
-    #resultCanvas { max-width: 100%; max-height: 100%; border: 1px solid var(--border); display: block; }
+    /* ── RESULT ── */
+    .result-area{flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:var(--surf2);padding:20px}
+    #resultCanvas{max-width:100%;max-height:100%;border:1px solid var(--border);display:block}
 
-    #procCanvas, #capCanvas { display: none; }
+    #procCanvas,#capCanvas{display:none}
   </style>
 </head>
 <body>
@@ -70,49 +79,58 @@
 <!-- LOADING -->
 <div id="loading">
   <div class="logo">CARD<span>SCAN</span></div>
-  <div class="spinner"></div>
-  <div class="load-label" id="loadLabel">CARICAMENTO OPENCV.JS...</div>
+  <div class="spin"></div>
+  <div class="lbl" id="loadLbl">CARICAMENTO OPENCV.JS...</div>
 </div>
 
-<!-- SCAN -->
-<div id="scanScreen" class="hide">
+<!-- ① CAMERA SCREEN -->
+<div id="cameraScreen" class="screen hide">
   <div class="hdr">
     <div class="hdr-logo">CARDSCAN</div>
-    <div class="hdr-step" id="stepLabel">PASSO 1 / 2</div>
+    <div class="hdr-tag" id="camTag">PASSO 1 / 2</div>
   </div>
   <div class="cam-wrap">
     <video id="video" autoplay playsinline muted></video>
-    <canvas id="overlay"></canvas>
-    <div class="badge" id="badge">BIGLIETTO RILEVATO</div>
+    <div class="guide"><i></i></div>
   </div>
   <div class="panel">
     <div class="thumbs">
-      <div class="thumb-wrap">
-        <div class="thumb-box" id="thumbFront"><span class="ph">FRONTE</span></div>
-        <div class="thumb-lbl">FRONTE</div>
-      </div>
-      <div class="thumb-wrap">
-        <div class="thumb-box" id="thumbBack"><span class="ph">RETRO</span></div>
-        <div class="thumb-lbl">RETRO</div>
-      </div>
+      <div class="tw"><div class="tb" id="tbFront"><span class="ph">FRONTE</span></div><div class="tlbl">FRONTE</div></div>
+      <div class="tw"><div class="tb" id="tbBack"><span class="ph">RETRO</span></div><div class="tlbl">RETRO</div></div>
     </div>
-    <div class="status" id="status">INQUADRA IL BIGLIETTO DA VISITA</div>
-    <button class="btn" id="captureBtn" onclick="onCapture()">SCATTA FRONTE</button>
-    <button class="btn sec" onclick="resetCorners()">REIMPOSTA ANGOLI AUTO</button>
+    <div class="st" id="camStatus">INQUADRA IL BIGLIETTO E SCATTA</div>
+    <button class="btn" id="shootBtn" onclick="onShoot()">📷 SCATTA FRONTE</button>
   </div>
 </div>
 
-<!-- RESULT -->
-<div id="resultScreen" class="hide">
+<!-- ② ADJUST SCREEN (fermo immagine + angoli) -->
+<div id="adjustScreen" class="screen hide">
   <div class="hdr">
     <div class="hdr-logo">CARDSCAN</div>
-    <div class="hdr-step" style="color:var(--accent);border-color:var(--accent)">COMPLETATO ✓</div>
+    <div class="hdr-tag" id="adjTag">AGGIUSTA I BORDI</div>
+  </div>
+  <div class="cam-wrap" id="adjWrap">
+    <img id="frozenImg" alt="">
+    <canvas id="adjOverlay"></canvas>
+  </div>
+  <div class="panel">
+    <div class="st ok" id="adjStatus">TRASCINA GLI ANGOLI PER AGGIUSTARE</div>
+    <button class="btn" onclick="onConfirm()">✓ CONFERMA E RITAGLIA</button>
+    <button class="btn danger" onclick="onRetry()">↩ RISCATTA</button>
+  </div>
+</div>
+
+<!-- ③ RESULT SCREEN -->
+<div id="resultScreen" class="screen hide">
+  <div class="hdr">
+    <div class="hdr-logo">CARDSCAN</div>
+    <div class="hdr-tag ok">COMPLETATO ✓</div>
   </div>
   <div class="result-area"><canvas id="resultCanvas"></canvas></div>
   <div class="panel">
-    <div class="status ok">SCANSIONE COMPLETATA — FRONTE + RETRO</div>
-    <button class="btn" onclick="downloadResult()">SALVA IN PNG</button>
-    <button class="btn sec" onclick="resetApp()">NUOVA SCANSIONE</button>
+    <div class="st ok">SCANSIONE COMPLETATA — FRONTE + RETRO</div>
+    <button class="btn" onclick="downloadResult()">💾 SALVA IN PNG</button>
+    <button class="btn sec" onclick="resetApp()">↩ NUOVA SCANSIONE</button>
   </div>
 </div>
 
@@ -122,526 +140,476 @@
 <script>
 'use strict';
 
-// ━━━━━ STATE ━━━━━
-let cvReady = false, stream = null, rafId = null;
-let step = 'front', frontCanvas = null, backCanvas = null;
+// ═══════════ STATE ═══════════
+let cvReady = false, stream = null;
+let step = 'front';          // 'front' | 'back'
+let frontCanvas = null, backCanvas = null;
+let frozenDataUrl = null;    // foto congelata (per adjust screen)
 
-// corners [TL, TR, BR, BL] in display coords
+// Corners in coords RELATIVE all'immagine congelata visualizzata
+// [TL, TR, BR, BL]
 let corners = null;
 let dragIdx = -1, dragOffX = 0, dragOffY = 0;
-let autoDetect = true;
-let stableCount = 0;
-const STABLE_NEEDED = 3;
-const HIT_R   = 32;
-const LOUPE_R = 60;
-const LOUPE_Z = 3.0;
 
-// ── Smoothing: media mobile degli ultimi N rilevamenti ──
-const SMOOTH_N  = 6;     // quanti frame mediare
-const LERP_SPD  = 0.25;  // velocità interpolazione verso nuovo valore (0=fermo, 1=snap)
-let   smoothBuf = [];    // ultimi N array di corners rilevati
-let   smoothed  = null;  // corners interpolati correnti (display coords)
-
-// ── Throttle: non elaborare ogni singolo frame per risparmiare CPU ──
-let lastDetectTime = 0;
-const DETECT_INTERVAL_MS = 80; // ~12fps detection, 60fps rendering
+const HIT_R  = 34;
+const LOUPE_R = 62;
+const LOUPE_Z = 3.2;
 
 // DOM
-const $loading    = id('loading');
-const $loadLabel  = id('loadLabel');
-const $scanScreen = id('scanScreen');
-const $resultScreen = id('resultScreen');
-const $video      = id('video');
-const $overlay    = id('overlay');
-const $badge      = id('badge');
-const $status     = id('status');
-const $captureBtn = id('captureBtn');
-const $stepLabel  = id('stepLabel');
-const $procCanvas = id('procCanvas');
-const $capCanvas  = id('capCanvas');
-const ovCtx = $overlay.getContext('2d');
+const $ = id => document.getElementById(id);
+const $loading  = $('loading');
+const $loadLbl  = $('loadLbl');
+const $camScr   = $('cameraScreen');
+const $adjScr   = $('adjustScreen');
+const $resScr   = $('resultScreen');
+const $video    = $('video');
+const $shootBtn = $('shootBtn');
+const $camTag   = $('camTag');
+const $camSt    = $('camStatus');
+const $adjTag   = $('adjTag');
+const $adjSt    = $('adjStatus');
+const $frozenImg= $('frozenImg');
+const $adjWrap  = $('adjWrap');
+const $adjOv    = $('adjOverlay');
+const $procCanvas=$('procCanvas');
+const $capCanvas =$('capCanvas');
+const adjCtx    = $adjOv.getContext('2d');
 
-function id(x) { return document.getElementById(x); }
-
-// ━━━━━ OPENCV INIT ━━━━━
-function cvScriptLoaded() {
-  if (typeof cv === 'undefined') { setTimeout(cvScriptLoaded, 300); return; }
-  if (cv.getBuildInformation) onCvReady();
-  else cv.onRuntimeInitialized = onCvReady;
+// ═══════════ OPENCV ═══════════
+function cvScriptLoaded(){
+  if(typeof cv==='undefined'){setTimeout(cvScriptLoaded,300);return}
+  if(cv.getBuildInformation) onCvReady();
+  else cv.onRuntimeInitialized=onCvReady;
 }
-let pollN = 0;
-setTimeout(function poll() {
-  if (cvReady) return;
-  if (typeof cv !== 'undefined' && (cv.getBuildInformation || cv.Mat)) { onCvReady(); return; }
-  if (++pollN < 60) setTimeout(poll, 500);
-  else $loadLabel.textContent = 'ERRORE — RICARICA LA PAGINA';
-}, 2000);
+let pollN=0;
+setTimeout(function poll(){
+  if(cvReady)return;
+  if(typeof cv!=='undefined'&&(cv.getBuildInformation||cv.Mat)){onCvReady();return}
+  if(++pollN<60)setTimeout(poll,500);
+  else $loadLbl.textContent='ERRORE — RICARICA';
+},2000);
 
-function onCvReady() {
-  if (cvReady) return;
-  cvReady = true;
+function onCvReady(){
+  if(cvReady)return; cvReady=true;
   $loading.classList.add('hide');
-  $scanScreen.classList.remove('hide');
+  $camScr.classList.remove('hide');
   startCamera();
 }
 
-// ━━━━━ CAMERA ━━━━━
-async function startCamera() {
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false
+// ═══════════ CAMERA ═══════════
+async function startCamera(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},
+      audio:false
     });
-    $video.srcObject = stream;
-    $video.onloadedmetadata = () => {
-      $video.play();
-      resizeOverlay();
-      setDefaultCorners();
-      bindTouch();
-      startLoop();
-    };
-  } catch(e) { setStatus('ERRORE FOTOCAMERA: ' + e.message, 'warn'); }
+    $video.srcObject=stream;
+    await $video.play();
+  }catch(e){$camSt.textContent='ERRORE FOTOCAMERA: '+e.message;$camSt.className='st warn'}
+}
+function stopCamera(){
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
 }
 
-function stopCamera() {
-  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+// ═══════════ SHOOT ═══════════
+function onShoot(){
+  // Cattura il frame corrente
+  const vw=$video.videoWidth, vh=$video.videoHeight;
+  $capCanvas.width=vw; $capCanvas.height=vh;
+  $capCanvas.getContext('2d').drawImage($video,0,0);
+  frozenDataUrl=$capCanvas.toDataURL('image/jpeg',0.95);
+
+  // Passa ad adjust screen
+  $camScr.classList.add('hide');
+  $adjScr.classList.remove('hide');
+
+  $frozenImg.onload=()=>{
+    resizeAdjOverlay();
+    detectOnFrozen();
+    bindAdjTouch();
+  };
+  $frozenImg.src=frozenDataUrl;
 }
 
-// ━━━━━ OVERLAY / CORNERS ━━━━━
-function resizeOverlay() {
-  $overlay.width  = $video.clientWidth  || $overlay.parentElement.clientWidth;
-  $overlay.height = $video.clientHeight || $overlay.parentElement.clientHeight;
+function onRetry(){
+  // Torna alla camera
+  $adjScr.classList.add('hide');
+  $camScr.classList.remove('hide');
+  if(!stream) startCamera();
 }
 
-function setDefaultCorners() {
-  const W = $overlay.width  || window.innerWidth;
-  const H = $overlay.height || (window.innerHeight - 200);
-  const mx = W * 0.10, my = H * 0.18;
-  corners = [
-    { x: mx,     y: my },
-    { x: W - mx, y: my },
-    { x: W - mx, y: H - my },
-    { x: mx,     y: H - my }
-  ];
-}
+// ═══════════ DETECT ON FROZEN IMAGE ═══════════
+function detectOnFrozen(){
+  // Lavora sul canvas della foto catturata (piena risoluzione)
+  const vw=$capCanvas.width, vh=$capCanvas.height;
+  // Scala per velocità
+  const SC=0.6;
+  const sw=Math.round(vw*SC), sh=Math.round(vh*SC);
 
-// ━━━━━ TOUCH / MOUSE ━━━━━
-function bindTouch() {
-  $overlay.addEventListener('touchstart',  onTS, { passive: false });
-  $overlay.addEventListener('touchmove',   onTM, { passive: false });
-  $overlay.addEventListener('touchend',    onTE, { passive: false });
-  $overlay.addEventListener('mousedown',   onMD);
-  window.addEventListener  ('mousemove',   onMM);
-  window.addEventListener  ('mouseup',     onMU);
-}
+  let src=null,small=null,gray=null,blur=null;
+  let bestPts=null,bestArea=0;
 
-function ptFromTouch(e) {
-  const r = $overlay.getBoundingClientRect();
-  return { x: e.changedTouches[0].clientX - r.left, y: e.changedTouches[0].clientY - r.top };
-}
-function ptFromMouse(e) {
-  const r = $overlay.getBoundingClientRect();
-  return { x: e.clientX - r.left, y: e.clientY - r.top };
-}
+  try{
+    src=cv.imread($capCanvas);
+    small=new cv.Mat(); gray=new cv.Mat(); blur=new cv.Mat();
+    cv.resize(src,small,new cv.Size(sw,sh));
+    cv.cvtColor(small,gray,cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray,blur,new cv.Size(5,5),0);
 
-function nearestCorner(pos) {
-  if (!corners) return -1;
-  let best = -1, bestD = Infinity;
-  corners.forEach((c, i) => {
-    const d = Math.hypot(c.x - pos.x, c.y - pos.y);
-    if (d < HIT_R * 2 && d < bestD) { best = i; bestD = d; }
-  });
-  return best;
-}
+    // Multi-pass Canny
+    for(const [lo,hi] of [[8,32],[20,70],[45,130],[75,200]]){
+      const edges=new cv.Mat();
+      cv.Canny(blur,edges,lo,hi);
+      const k3=cv.Mat.ones(3,3,cv.CV_8U);
+      cv.dilate(edges,edges,k3);
+      const k5=cv.Mat.ones(5,5,cv.CV_8U);
+      cv.morphologyEx(edges,edges,cv.MORPH_CLOSE,k5);
+      k3.delete(); k5.delete();
 
-function startDrag(pos) {
-  const i = nearestCorner(pos);
-  if (i < 0) return false;
-  dragIdx  = i;
-  dragOffX = corners[i].x - pos.x;
-  dragOffY = corners[i].y - pos.y;
-  autoDetect = false;
-  return true;
-}
-function doDrag(pos) {
-  if (dragIdx < 0) return;
-  const W = $overlay.width, H = $overlay.height;
-  corners[dragIdx].x = Math.max(0, Math.min(W, pos.x + dragOffX));
-  corners[dragIdx].y = Math.max(0, Math.min(H, pos.y + dragOffY));
-  drawOverlay(corners, true, pos);
-}
-function endDrag() { dragIdx = -1; drawOverlay(corners, true, null); }
+      const ctrs=new cv.MatVector(), hier=new cv.Mat();
+      cv.findContours(edges,ctrs,hier,cv.RETR_LIST,cv.CHAIN_APPROX_SIMPLE);
 
-function onTS(e) { e.preventDefault(); if (startDrag(ptFromTouch(e))) e.stopPropagation(); }
-function onTM(e) { e.preventDefault(); doDrag(ptFromTouch(e)); }
-function onTE(e) { e.preventDefault(); endDrag(); }
-function onMD(e) { startDrag(ptFromMouse(e)); }
-function onMM(e) { if (dragIdx >= 0) doDrag(ptFromMouse(e)); }
-function onMU()  { endDrag(); }
-
-// ━━━━━ MAIN LOOP ━━━━━
-function startLoop() {
-  function tick(ts) {
-    if ($video.readyState >= 2 && cvReady) {
-      resizeOverlay();
-      if (autoDetect && dragIdx < 0) {
-        // Rilevamento a ~12fps per non bloccare il thread
-        if (ts - lastDetectTime > DETECT_INTERVAL_MS) {
-          lastDetectTime = ts;
-          detectCard();
-        }
-        // Rendering a 60fps con corners interpolati
-        if (smoothed) drawOverlay(smoothed, stableCount >= STABLE_NEEDED, null);
-      } else if (dragIdx < 0) {
-        drawOverlay(corners, true, null);
-      }
-    }
-    rafId = requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-}
-
-// ━━━━━ CARD DETECTION ━━━━━
-function detectCard() {
-  const vw = $video.videoWidth, vh = $video.videoHeight;
-  if (!vw || !vh) return;
-
-  $procCanvas.width = vw; $procCanvas.height = vh;
-  $procCanvas.getContext('2d').drawImage($video, 0, 0);
-
-  // Scala più alta = contorni più precisi (ma più lento — bilanciato dal throttle)
-  const SC = 0.55;
-  const sw = Math.round(vw * SC), sh = Math.round(vh * SC);
-
-  let src=null, small=null, gray=null, blur=null;
-  let bestPts=null, bestArea=0;
-
-  try {
-    src   = cv.imread($procCanvas);
-    small = new cv.Mat(); gray = new cv.Mat(); blur = new cv.Mat();
-    cv.resize(src, small, new cv.Size(sw, sh));
-    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
-    // Blur leggero: preserva i bordi nitidi
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-
-    for (const [lo, hi] of [[10,40],[25,80],[50,150],[80,220]]) {
-      const edges = new cv.Mat();
-      cv.Canny(blur, edges, lo, hi);
-      const k = cv.Mat.ones(3, 3, cv.CV_8U); // kernel più piccolo = bordi più precisi
-      cv.dilate(edges, edges, k);
-      cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k);
-      k.delete();
-
-      const ctrs = new cv.MatVector(), hier = new cv.Mat();
-      cv.findContours(edges, ctrs, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-
-      const minA = sw * sh * 0.025;
-      for (let i = 0; i < ctrs.size(); i++) {
-        const cnt  = ctrs.get(i);
-        const area = cv.contourArea(cnt);
-        if (area < minA || area > sw*sh*0.97) { cnt.delete(); continue; }
-        const hull = new cv.Mat();
-        cv.convexHull(cnt, hull);
-        const hArea = cv.contourArea(hull);
-        const peri  = cv.arcLength(hull, true);
-        // Epsilon più stretto per contorno più aderente
-        for (const eps of [0.01, 0.015, 0.02, 0.03, 0.05, 0.08]) {
-          const ap = new cv.Mat();
-          cv.approxPolyDP(hull, ap, eps * peri, true);
-          if (ap.rows === 4) {
-            const pts = [];
-            for (let j = 0; j < 4; j++)
-              pts.push({ x: ap.data32S[j*2]/SC, y: ap.data32S[j*2+1]/SC });
-            const [tl,tr,br,bl] = orderPts(pts);
-            const w = Math.hypot(tr.x-tl.x, tr.y-tl.y);
-            const h = Math.hypot(bl.x-tl.x, bl.y-tl.y);
-            const ratio = Math.max(w,h) / (Math.min(w,h) || 1);
-            if (ratio >= 1.1 && ratio <= 3.2 && hArea > bestArea) {
-              bestPts = pts; bestArea = hArea;
+      const minA=sw*sh*0.02;
+      for(let i=0;i<ctrs.size();i++){
+        const cnt=ctrs.get(i);
+        const area=cv.contourArea(cnt);
+        if(area<minA||area>sw*sh*0.97){cnt.delete();continue}
+        const hull=new cv.Mat();
+        cv.convexHull(cnt,hull);
+        const hArea=cv.contourArea(hull);
+        const peri=cv.arcLength(hull,true);
+        for(const eps of [0.01,0.015,0.02,0.03,0.05,0.08]){
+          const ap=new cv.Mat();
+          cv.approxPolyDP(hull,ap,eps*peri,true);
+          if(ap.rows===4){
+            const pts=[];
+            for(let j=0;j<4;j++)
+              pts.push({x:ap.data32S[j*2]/SC, y:ap.data32S[j*2+1]/SC});
+            const [tl,tr,br,bl]=orderPts(pts);
+            const w=Math.hypot(tr.x-tl.x,tr.y-tl.y);
+            const h=Math.hypot(bl.x-tl.x,bl.y-tl.y);
+            const ratio=Math.max(w,h)/(Math.min(w,h)||1);
+            if(ratio>=1.1&&ratio<=3.5&&hArea>bestArea){
+              bestPts=pts; bestArea=hArea;
             }
           }
           ap.delete();
-          if (bestPts && bestArea > sw*sh*0.06) break;
+          if(bestPts&&bestArea>sw*sh*0.06) break;
         }
         hull.delete(); cnt.delete();
       }
       ctrs.delete(); hier.delete(); edges.delete();
-      if (bestPts && bestArea > sw*sh*0.06) break;
+      if(bestPts&&bestArea>sw*sh*0.06) break;
     }
-  } catch(e) { console.error('CV:', e); }
-  finally { [src, small, gray, blur].forEach(m => { try { if(m) m.delete(); } catch(_){} }); }
+  }catch(e){console.error('CV:',e)}
+  finally{[src,small,gray,blur].forEach(m=>{try{if(m)m.delete()}catch(_){}})}
 
-  if (bestPts) {
-    stableCount = Math.min(stableCount + 1, STABLE_NEEDED + 5);
-    const dw = $overlay.width, dh = $overlay.height;
-    const sx = dw / $video.videoWidth, sy = dh / $video.videoHeight;
-    const raw = orderPts(bestPts).map(p => ({ x: p.x*sx, y: p.y*sy }));
+  // Converti coordinate immagine → coordinate display sull'img element
+  const rect=$frozenImg.getBoundingClientRect();
+  const iw=$capCanvas.width, ih=$capCanvas.height;
+  const dw=rect.width, dh=rect.height;
 
-    // ── Aggiungi al buffer di smoothing ──
-    smoothBuf.push(raw);
-    if (smoothBuf.length > SMOOTH_N) smoothBuf.shift();
-
-    // Media dei punti nel buffer
-    const avg = [0,1,2,3].map(i => ({
-      x: smoothBuf.reduce((s,f) => s + f[i].x, 0) / smoothBuf.length,
-      y: smoothBuf.reduce((s,f) => s + f[i].y, 0) / smoothBuf.length
-    }));
-
-    // Interpolazione lineare verso la media (evita salti bruschi)
-    if (!smoothed) {
-      smoothed = avg;
-    } else {
-      smoothed = smoothed.map((p, i) => ({
-        x: p.x + (avg[i].x - p.x) * LERP_SPD,
-        y: p.y + (avg[i].y - p.y) * LERP_SPD
-      }));
-    }
-
-    if (stableCount >= STABLE_NEEDED) {
-      corners = smoothed; // corners aggiornati = quello che userà il warp
-      $badge.classList.add('show');
-      setStatus('RILEVATO — TRASCINA GLI ANGOLI PER AGGIUSTARE', 'ok');
-    }
-  } else {
-    stableCount = Math.max(stableCount - 1, 0);
-    if (stableCount === 0) {
-      $badge.classList.remove('show');
-      smoothBuf = [];
-      setStatus(step==='front' ? 'INQUADRA IL FRONTE DEL BIGLIETTO' : 'GIRA IL BIGLIETTO — INQUADRA IL RETRO', '');
-    }
+  // object-fit:contain → calcola offset letterbox
+  const imgRatio=iw/ih, dispRatio=dw/dh;
+  let renderW,renderH,offX,offY;
+  if(imgRatio>dispRatio){
+    renderW=dw; renderH=dw/imgRatio;
+    offX=0; offY=(dh-renderH)/2;
+  }else{
+    renderH=dh; renderW=dh*imgRatio;
+    offX=(dw-renderW)/2; offY=0;
   }
-}
 
-// ━━━━━ DRAW OVERLAY ━━━━━
-function drawOverlay(pts, confirmed, loupeFingerPos) {
-  const W = $overlay.width, H = $overlay.height;
-  ovCtx.clearRect(0, 0, W, H);
-  if (!pts) return;
-
-  const col  = confirmed ? '#3df5c1' : '#f5a53d';
-  const fill = confirmed ? 'rgba(61,245,193,0.09)' : 'rgba(245,165,61,0.07)';
-
-  // Poligono
-  ovCtx.beginPath();
-  ovCtx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) ovCtx.lineTo(pts[i].x, pts[i].y);
-  ovCtx.closePath();
-  ovCtx.fillStyle = fill; ovCtx.fill();
-
-  // Bordi
-  ovCtx.beginPath();
-  ovCtx.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) ovCtx.lineTo(pts[i].x, pts[i].y);
-  ovCtx.closePath();
-  ovCtx.strokeStyle = col; ovCtx.lineWidth = 2; ovCtx.setLineDash([]); ovCtx.stroke();
-
-  // Angoli — handle
-  pts.forEach((p, i) => {
-    const active = (i === dragIdx);
-    // Cerchio
-    ovCtx.beginPath();
-    ovCtx.arc(p.x, p.y, active ? 20 : 14, 0, Math.PI*2);
-    ovCtx.fillStyle = active ? col : 'rgba(255,255,255,0.18)';
-    ovCtx.fill();
-    ovCtx.strokeStyle = '#fff'; ovCtx.lineWidth = 2; ovCtx.stroke();
-    // Dot
-    ovCtx.beginPath();
-    ovCtx.arc(p.x, p.y, 4, 0, Math.PI*2);
-    ovCtx.fillStyle = active ? '#000' : col; ovCtx.fill();
-
-    // Bracket
-    const nx = pts[(i+1)%4], px = pts[(i+3)%4];
-    const dn = norm2(nx.x-p.x, nx.y-p.y);
-    const dp = norm2(px.x-p.x, px.y-p.y);
-    const L = 16;
-    ovCtx.beginPath();
-    ovCtx.moveTo(p.x + dn.x*L, p.y + dn.y*L);
-    ovCtx.lineTo(p.x, p.y);
-    ovCtx.lineTo(p.x + dp.x*L, p.y + dp.y*L);
-    ovCtx.strokeStyle = col; ovCtx.lineWidth = 3; ovCtx.stroke();
+  const scaleToDisp = pt => ({
+    x: pt.x*(renderW/iw)+offX,
+    y: pt.y*(renderH/ih)+offY
   });
 
-  // ━━━ LENTE ━━━
-  if (dragIdx >= 0 && loupeFingerPos) {
-    const cx = corners[dragIdx].x;
-    const cy = corners[dragIdx].y;
+  if(bestPts){
+    corners=orderPts(bestPts).map(scaleToDisp);
+    $adjSt.textContent='BORDI RILEVATI — TRASCINA PER AGGIUSTARE';
+    $adjSt.className='st ok';
+  }else{
+    // Fallback: rettangolo al 70% centrato
+    const px=dw*0.12, py=dh*0.15;
+    corners=[
+      {x:px,      y:py},
+      {x:dw-px,   y:py},
+      {x:dw-px,   y:dh-py},
+      {x:px,      y:dh-py}
+    ];
+    $adjSt.textContent='BORDI NON RILEVATI — TRASCINA GLI ANGOLI';
+    $adjSt.className='st warn';
+  }
 
-    // Posizione lente: sopra il dito se possibile, altrimenti sotto
-    let lx = cx;
-    let ly = cy - LOUPE_R * 2.4;
-    if (ly < LOUPE_R + 8) ly = cy + LOUPE_R * 2.4;
-    // Mantieni nella viewport
-    lx = Math.max(LOUPE_R + 4, Math.min(W - LOUPE_R - 4, lx));
-    ly = Math.max(LOUPE_R + 4, Math.min(H - LOUPE_R - 4, ly));
+  drawAdj(null);
+}
 
-    // Linea tratteggiata angolo → lente
-    ovCtx.beginPath();
-    ovCtx.moveTo(cx, cy); ovCtx.lineTo(lx, ly);
-    ovCtx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ovCtx.lineWidth = 1.5; ovCtx.setLineDash([5, 5]); ovCtx.stroke();
-    ovCtx.setLineDash([]);
+// ═══════════ ADJUST OVERLAY ═══════════
+function resizeAdjOverlay(){
+  const r=$adjWrap.getBoundingClientRect();
+  $adjOv.width=r.width;
+  $adjOv.height=r.height;
+}
 
-    // Clip + zoom video
-    const vw = $video.videoWidth, vh = $video.videoHeight;
-    const dw = $overlay.width,    dh = $overlay.height;
-    const srcX = cx * (vw / dw);
-    const srcY = cy * (vh / dh);
-    const srcR = LOUPE_R * (vw / dw) / LOUPE_Z;
+function bindAdjTouch(){
+  // Rimuovi listener precedenti ricreando il canvas
+  $adjOv.removeEventListener('touchstart',onTS);
+  $adjOv.removeEventListener('touchmove', onTM);
+  $adjOv.removeEventListener('touchend',  onTE);
+  $adjOv.removeEventListener('mousedown', onMD);
+  window.removeEventListener('mousemove', onMM);
+  window.removeEventListener('mouseup',   onMU);
 
-    ovCtx.save();
-    ovCtx.beginPath();
-    ovCtx.arc(lx, ly, LOUPE_R, 0, Math.PI*2);
-    ovCtx.clip();
-    // Sfondo nero prima
-    ovCtx.fillStyle = '#000'; ovCtx.fillRect(lx-LOUPE_R, ly-LOUPE_R, LOUPE_R*2, LOUPE_R*2);
-    ovCtx.drawImage(
-      $video,
-      srcX - srcR, srcY - srcR, srcR*2, srcR*2,
-      lx - LOUPE_R, ly - LOUPE_R, LOUPE_R*2, LOUPE_R*2
-    );
-    ovCtx.restore();
+  $adjOv.addEventListener('touchstart', onTS,{passive:false});
+  $adjOv.addEventListener('touchmove',  onTM,{passive:false});
+  $adjOv.addEventListener('touchend',   onTE,{passive:false});
+  $adjOv.addEventListener('mousedown',  onMD);
+  window.addEventListener('mousemove',  onMM);
+  window.addEventListener('mouseup',    onMU);
+}
 
-    // Cerchio bianco lente
-    ovCtx.beginPath();
-    ovCtx.arc(lx, ly, LOUPE_R, 0, Math.PI*2);
-    ovCtx.strokeStyle = '#ffffff'; ovCtx.lineWidth = 3; ovCtx.stroke();
+function ptFromTouch(e){
+  const r=$adjOv.getBoundingClientRect();
+  return{x:e.changedTouches[0].clientX-r.left, y:e.changedTouches[0].clientY-r.top};
+}
+function ptFromMouse(e){
+  const r=$adjOv.getBoundingClientRect();
+  return{x:e.clientX-r.left, y:e.clientY-r.top};
+}
 
-    // Anello colorato dentro
-    ovCtx.beginPath();
-    ovCtx.arc(lx, ly, LOUPE_R - 3, 0, Math.PI*2);
-    ovCtx.strokeStyle = col; ovCtx.lineWidth = 1.5; ovCtx.stroke();
+function nearCorner(pos){
+  if(!corners)return -1;
+  let best=-1,bestD=Infinity;
+  corners.forEach((c,i)=>{
+    const d=Math.hypot(c.x-pos.x,c.y-pos.y);
+    if(d<HIT_R*2&&d<bestD){best=i;bestD=d}
+  });
+  return best;
+}
 
-    // Mirino centrale
-    const MR = 10;
-    ovCtx.strokeStyle = col; ovCtx.lineWidth = 1.5;
-    [[lx-MR, ly, lx+MR, ly],[lx, ly-MR, lx, ly+MR]].forEach(([x1,y1,x2,y2]) => {
-      ovCtx.beginPath(); ovCtx.moveTo(x1,y1); ovCtx.lineTo(x2,y2); ovCtx.stroke();
+function onTS(e){e.preventDefault();const p=ptFromTouch(e);const i=nearCorner(p);if(i<0)return;dragIdx=i;dragOffX=corners[i].x-p.x;dragOffY=corners[i].y-p.y}
+function onTM(e){e.preventDefault();if(dragIdx<0)return;const p=ptFromTouch(e);moveDrag(p)}
+function onTE(e){e.preventDefault();dragIdx=-1;drawAdj(null)}
+function onMD(e){const p=ptFromMouse(e);const i=nearCorner(p);if(i<0)return;dragIdx=i;dragOffX=corners[i].x-p.x;dragOffY=corners[i].y-p.y}
+function onMM(e){if(dragIdx<0)return;moveDrag(ptFromMouse(e))}
+function onMU(){dragIdx=-1;drawAdj(null)}
+
+function moveDrag(pos){
+  const W=$adjOv.width, H=$adjOv.height;
+  corners[dragIdx].x=Math.max(0,Math.min(W,pos.x+dragOffX));
+  corners[dragIdx].y=Math.max(0,Math.min(H,pos.y+dragOffY));
+  drawAdj(pos);
+}
+
+// ═══════════ DRAW ADJUST ═══════════
+function drawAdj(loupePos){
+  const W=$adjOv.width, H=$adjOv.height;
+  adjCtx.clearRect(0,0,W,H);
+  if(!corners)return;
+
+  const col='#3df5c1';
+  const fill='rgba(61,245,193,0.09)';
+
+  // Poligono
+  adjCtx.beginPath();
+  adjCtx.moveTo(corners[0].x,corners[0].y);
+  for(let i=1;i<4;i++) adjCtx.lineTo(corners[i].x,corners[i].y);
+  adjCtx.closePath();
+  adjCtx.fillStyle=fill; adjCtx.fill();
+  adjCtx.strokeStyle=col; adjCtx.lineWidth=2; adjCtx.setLineDash([]); adjCtx.stroke();
+
+  // Handles
+  corners.forEach((p,i)=>{
+    const active=(i===dragIdx);
+    adjCtx.beginPath();
+    adjCtx.arc(p.x,p.y,active?22:16,0,Math.PI*2);
+    adjCtx.fillStyle=active?col:'rgba(255,255,255,0.2)';
+    adjCtx.fill();
+    adjCtx.strokeStyle='#fff'; adjCtx.lineWidth=2; adjCtx.stroke();
+    adjCtx.beginPath();
+    adjCtx.arc(p.x,p.y,4,0,Math.PI*2);
+    adjCtx.fillStyle=active?'#000':col; adjCtx.fill();
+
+    // Bracket
+    const nx=corners[(i+1)%4], px2=corners[(i+3)%4];
+    const dn=n2(nx.x-p.x,nx.y-p.y), dp=n2(px2.x-p.x,px2.y-p.y);
+    const L=16;
+    adjCtx.beginPath();
+    adjCtx.moveTo(p.x+dn.x*L,p.y+dn.y*L);
+    adjCtx.lineTo(p.x,p.y);
+    adjCtx.lineTo(p.x+dp.x*L,p.y+dp.y*L);
+    adjCtx.strokeStyle=col; adjCtx.lineWidth=3; adjCtx.stroke();
+  });
+
+  // ── LENTE ──
+  if(dragIdx>=0&&loupePos){
+    const cx=corners[dragIdx].x, cy=corners[dragIdx].y;
+    let lx=cx, ly=cy-LOUPE_R*2.4;
+    if(ly<LOUPE_R+8) ly=cy+LOUPE_R*2.4;
+    lx=Math.max(LOUPE_R+4,Math.min(W-LOUPE_R-4,lx));
+    ly=Math.max(LOUPE_R+4,Math.min(H-LOUPE_R-4,ly));
+
+    // Linea tratteggiata
+    adjCtx.beginPath(); adjCtx.moveTo(cx,cy); adjCtx.lineTo(lx,ly);
+    adjCtx.strokeStyle='rgba(255,255,255,.3)'; adjCtx.lineWidth=1.5;
+    adjCtx.setLineDash([5,5]); adjCtx.stroke(); adjCtx.setLineDash([]);
+
+    // Sorgente zoom: l'immagine congelata già mostrata
+    // Usa il frozenImg come sorgente per disegnare la lente
+    const iRect=$frozenImg.getBoundingClientRect();
+    const oRect=$adjOv.getBoundingClientRect();
+    // Offset dell'img rispetto all'overlay (coincidono perché absolute inset:0)
+    const iw=$capCanvas.width, ih=$capCanvas.height;
+    const dispW=$adjOv.width, dispH=$adjOv.height;
+
+    // Coordinate del punto in pixel immagine originale
+    const imgRatio=iw/ih, dispRatio=dispW/dispH;
+    let renderW,renderH,offX,offY;
+    if(imgRatio>dispRatio){
+      renderW=dispW; renderH=dispW/imgRatio; offX=0; offY=(dispH-renderH)/2;
+    }else{
+      renderH=dispH; renderW=dispH*imgRatio; offX=(dispW-renderW)/2; offY=0;
+    }
+    const imgX=(cx-offX)/(renderW/iw);
+    const imgY=(cy-offY)/(renderH/ih);
+    const srcR=(LOUPE_R/LOUPE_Z)*(iw/renderW);
+
+    adjCtx.save();
+    adjCtx.beginPath(); adjCtx.arc(lx,ly,LOUPE_R,0,Math.PI*2); adjCtx.clip();
+    adjCtx.fillStyle='#000'; adjCtx.fillRect(lx-LOUPE_R,ly-LOUPE_R,LOUPE_R*2,LOUPE_R*2);
+    adjCtx.drawImage($capCanvas, imgX-srcR,imgY-srcR,srcR*2,srcR*2, lx-LOUPE_R,ly-LOUPE_R,LOUPE_R*2,LOUPE_R*2);
+    adjCtx.restore();
+
+    adjCtx.beginPath(); adjCtx.arc(lx,ly,LOUPE_R,0,Math.PI*2);
+    adjCtx.strokeStyle='#fff'; adjCtx.lineWidth=3; adjCtx.stroke();
+    adjCtx.beginPath(); adjCtx.arc(lx,ly,LOUPE_R-3,0,Math.PI*2);
+    adjCtx.strokeStyle=col; adjCtx.lineWidth=1.5; adjCtx.stroke();
+
+    // Mirino
+    const MR=10; adjCtx.strokeStyle=col; adjCtx.lineWidth=1.5;
+    [[lx-MR,ly,lx+MR,ly],[lx,ly-MR,lx,ly+MR]].forEach(([x1,y1,x2,y2])=>{
+      adjCtx.beginPath(); adjCtx.moveTo(x1,y1); adjCtx.lineTo(x2,y2); adjCtx.stroke();
     });
   }
 }
 
-// ━━━━━ CAPTURE ━━━━━
-function onCapture() {
-  const vw = $video.videoWidth, vh = $video.videoHeight;
-  const dw = $overlay.width,    dh = $overlay.height;
-  $capCanvas.width = vw; $capCanvas.height = vh;
-  $capCanvas.getContext('2d').drawImage($video, 0, 0);
-  const videoPts = corners.map(p => ({ x: p.x * (vw/dw), y: p.y * (vh/dh) }));
-  const warped = perspectiveWarp($capCanvas, videoPts);
-  storeCapture(warped);
-}
+// ═══════════ CONFIRM ═══════════
+function onConfirm(){
+  // Converti corners display → coordinate pixel immagine originale
+  const iw=$capCanvas.width, ih=$capCanvas.height;
+  const dispW=$adjOv.width, dispH=$adjOv.height;
+  const imgRatio=iw/ih, dispRatio=dispW/dispH;
+  let renderW,renderH,offX,offY;
+  if(imgRatio>dispRatio){
+    renderW=dispW; renderH=dispW/imgRatio; offX=0; offY=(dispH-renderH)/2;
+  }else{
+    renderH=dispH; renderW=dispH*imgRatio; offX=(dispW-renderW)/2; offY=0;
+  }
+  const dispToImg=p=>({
+    x:(p.x-offX)*(iw/renderW),
+    y:(p.y-offY)*(ih/renderH)
+  });
+  const imagePts=corners.map(dispToImg);
+  const warped=perspectiveWarp($capCanvas, imagePts);
 
-function storeCapture(canvas) {
-  if (step === 'front') {
-    frontCanvas = canvas;
-    updateThumb('thumbFront', canvas);
-    step = 'back';
-    $stepLabel.textContent = 'PASSO 2 / 2';
-    $captureBtn.textContent = 'SCATTA RETRO';
-    stableCount = 0; autoDetect = true;
-    smoothBuf = []; smoothed = null;
-    setDefaultCorners();
-    $badge.classList.remove('show');
-    setStatus('ORA GIRA IL BIGLIETTO — INQUADRA IL RETRO', 'warn');
-  } else {
-    backCanvas = canvas;
-    updateThumb('thumbBack', canvas);
+  $adjScr.classList.add('hide');
+
+  if(step==='front'){
+    frontCanvas=warped;
+    updateThumb('tbFront',warped);
+    step='back';
+    $camTag.textContent='PASSO 2 / 2';
+    $shootBtn.textContent='📷 SCATTA RETRO';
+    $camSt.textContent='ORA GIRA IL BIGLIETTO E SCATTA IL RETRO';
+    $camSt.className='st warn';
+    $camScr.classList.remove('hide');
+    if(!stream) startCamera();
+  }else{
+    backCanvas=warped;
+    updateThumb('tbBack',warped);
     stopCamera();
     buildResult();
   }
 }
 
-function resetCorners() {
-  autoDetect = true; stableCount = 0;
-  smoothBuf = []; smoothed = null;
-  setDefaultCorners();
-  setStatus('RILEVAMENTO IN CORSO...', '');
+// ═══════════ PERSPECTIVE WARP ═══════════
+function orderPts(pts){
+  const tl=pts.reduce((a,b)=>a.x+a.y<b.x+b.y?a:b);
+  const br=pts.reduce((a,b)=>a.x+a.y>b.x+b.y?a:b);
+  const tr=pts.reduce((a,b)=>a.x-a.y>b.x-b.y?a:b);
+  const bl=pts.reduce((a,b)=>a.x-a.y<b.x-b.y?a:b);
+  return[tl,tr,br,bl];
 }
-
-// ━━━━━ PERSPECTIVE WARP ━━━━━
-function orderPts(pts) {
-  const tl = pts.reduce((a,b) => a.x+a.y < b.x+b.y ? a : b);
-  const br = pts.reduce((a,b) => a.x+a.y > b.x+b.y ? a : b);
-  const tr = pts.reduce((a,b) => a.x-a.y > b.x-b.y ? a : b);
-  const bl = pts.reduce((a,b) => a.x-a.y < b.x-b.y ? a : b);
-  return [tl, tr, br, bl];
-}
-function perspectiveWarp(srcCanvas, rawPts) {
-  const [tl,tr,br,bl] = orderPts(rawPts);
-  const maxW = Math.round(Math.max(Math.hypot(tr.x-tl.x,tr.y-tl.y), Math.hypot(br.x-bl.x,br.y-bl.y)));
-  const maxH = Math.round(Math.max(Math.hypot(bl.x-tl.x,bl.y-tl.y), Math.hypot(br.x-tr.x,br.y-tr.y)));
-  const out = document.createElement('canvas');
-  out.width = maxW; out.height = maxH;
-  let src=null,dst=null,srcM=null,dstM=null,M=null;
-  try {
-    src  = cv.imread(srcCanvas);
-    dst  = new cv.Mat();
-    srcM = cv.matFromArray(4,1,cv.CV_32FC2,[tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y]);
-    dstM = cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW,0,maxW,maxH,0,maxH]);
-    M    = cv.getPerspectiveTransform(srcM, dstM);
-    cv.warpPerspective(src,dst,M,new cv.Size(maxW,maxH),cv.INTER_LINEAR,cv.BORDER_REPLICATE);
-    cv.imshow(out, dst);
-  } catch(e) {
-    out.getContext('2d').drawImage(srcCanvas, 0, 0);
-  } finally {
-    [src,dst,srcM,dstM,M].forEach(m => { try { if(m) m.delete(); } catch(_){} });
-  }
+function perspectiveWarp(srcCanvas,rawPts){
+  const[tl,tr,br,bl]=orderPts(rawPts);
+  const maxW=Math.round(Math.max(Math.hypot(tr.x-tl.x,tr.y-tl.y),Math.hypot(br.x-bl.x,br.y-bl.y)));
+  const maxH=Math.round(Math.max(Math.hypot(bl.x-tl.x,bl.y-tl.y),Math.hypot(br.x-tr.x,br.y-tr.y)));
+  const out=document.createElement('canvas');
+  out.width=maxW; out.height=maxH;
+  let s=null,d=null,sm=null,dm=null,M=null;
+  try{
+    s=cv.imread(srcCanvas); d=new cv.Mat();
+    sm=cv.matFromArray(4,1,cv.CV_32FC2,[tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y]);
+    dm=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW,0,maxW,maxH,0,maxH]);
+    M=cv.getPerspectiveTransform(sm,dm);
+    cv.warpPerspective(s,d,M,new cv.Size(maxW,maxH),cv.INTER_LINEAR,cv.BORDER_REPLICATE);
+    cv.imshow(out,d);
+  }catch(e){out.getContext('2d').drawImage(srcCanvas,0,0)}
+  finally{[s,d,sm,dm,M].forEach(m=>{try{if(m)m.delete()}catch(_){}})}
   return out;
 }
 
-// ━━━━━ RESULT ━━━━━
-function buildResult() {
-  $scanScreen.classList.add('hide');
-  $resultScreen.classList.remove('hide');
-  const PAD=24, GAP=14, LBLH=30;
-  const H = Math.max(frontCanvas.height, backCanvas.height);
-  const fw = Math.round(frontCanvas.width * H / frontCanvas.height);
-  const bw = Math.round(backCanvas.width  * H / backCanvas.height);
-  const rc = id('resultCanvas');
-  rc.width = PAD*2+fw+GAP+bw; rc.height = PAD*2+H+LBLH;
-  const ctx = rc.getContext('2d');
-  ctx.fillStyle = '#0a0b10'; ctx.fillRect(0,0,rc.width,rc.height);
-  ctx.drawImage(frontCanvas, PAD, PAD, fw, H);
-  ctx.drawImage(backCanvas,  PAD+fw+GAP, PAD, bw, H);
-  ctx.strokeStyle = '#252635'; ctx.lineWidth = 1;
+// ═══════════ RESULT ═══════════
+function buildResult(){
+  $resScr.classList.remove('hide');
+  const PAD=24,GAP=14,LBLH=30;
+  const H=Math.max(frontCanvas.height,backCanvas.height);
+  const fw=Math.round(frontCanvas.width*H/frontCanvas.height);
+  const bw=Math.round(backCanvas.width*H/backCanvas.height);
+  const rc=$('resultCanvas');
+  rc.width=PAD*2+fw+GAP+bw; rc.height=PAD*2+H+LBLH;
+  const ctx=rc.getContext('2d');
+  ctx.fillStyle='#0a0b10'; ctx.fillRect(0,0,rc.width,rc.height);
+  ctx.drawImage(frontCanvas,PAD,PAD,fw,H);
+  ctx.drawImage(backCanvas,PAD+fw+GAP,PAD,bw,H);
+  ctx.strokeStyle='#252635'; ctx.lineWidth=1;
   ctx.strokeRect(PAD,PAD,fw,H); ctx.strokeRect(PAD+fw+GAP,PAD,bw,H);
-  ctx.fillStyle = '#585a70'; ctx.font = '11px "Courier New"'; ctx.textAlign = 'center';
-  ctx.fillText('FRONTE', PAD+fw/2, PAD+H+20);
-  ctx.fillText('RETRO',  PAD+fw+GAP+bw/2, PAD+H+20);
+  ctx.fillStyle='#585a70'; ctx.font='11px "Courier New"'; ctx.textAlign='center';
+  ctx.fillText('FRONTE',PAD+fw/2,PAD+H+20);
+  ctx.fillText('RETRO',PAD+fw+GAP+bw/2,PAD+H+20);
 }
 
-function downloadResult() {
-  const rc = id('resultCanvas');
-  const now = new Date();
-  const ts = [now.getFullYear(),p2(now.getMonth()+1),p2(now.getDate()),'_',p2(now.getHours()),p2(now.getMinutes())].join('');
-  const a = document.createElement('a');
-  a.download = `biglietto_${ts}.png`; a.href = rc.toDataURL('image/png'); a.click();
+function downloadResult(){
+  const rc=$('resultCanvas');
+  const now=new Date();
+  const ts=[now.getFullYear(),p2(now.getMonth()+1),p2(now.getDate()),'_',p2(now.getHours()),p2(now.getMinutes())].join('');
+  const a=document.createElement('a');
+  a.download=`biglietto_${ts}.png`; a.href=rc.toDataURL('image/png'); a.click();
 }
 
-function resetApp() {
-  frontCanvas = backCanvas = null;
-  step = 'front'; stableCount = 0; autoDetect = true; dragIdx = -1;
-  smoothBuf = []; smoothed = null;
-  $stepLabel.textContent = 'PASSO 1 / 2'; $captureBtn.textContent = 'SCATTA FRONTE';
-  resetThumb('thumbFront','FRONTE'); resetThumb('thumbBack','RETRO');
-  $badge.classList.remove('show');
-  $resultScreen.classList.add('hide'); $scanScreen.classList.remove('hide');
+function resetApp(){
+  frontCanvas=backCanvas=null; step='front'; dragIdx=-1;
+  $camTag.textContent='PASSO 1 / 2'; $shootBtn.textContent='📷 SCATTA FRONTE';
+  $camSt.textContent='INQUADRA IL BIGLIETTO E SCATTA'; $camSt.className='st';
+  resetThumb('tbFront','FRONTE'); resetThumb('tbBack','RETRO');
+  $resScr.classList.add('hide'); $adjScr.classList.add('hide');
+  $camScr.classList.remove('hide');
   startCamera();
 }
 
-// ━━━━━ HELPERS ━━━━━
-function setStatus(msg, type) { $status.textContent = msg; $status.className = 'status'+(type?' '+type:''); }
-function updateThumb(id_, canvas) {
-  const el = id(id_), img = new Image();
-  img.src = canvas.toDataURL('image/jpeg',0.8);
+// ═══════════ HELPERS ═══════════
+function updateThumb(id_,canvas){
+  const el=document.getElementById(id_),img=new Image();
+  img.src=canvas.toDataURL('image/jpeg',.8);
   el.innerHTML=''; el.appendChild(img); el.classList.add('done');
 }
-function resetThumb(id_, lbl) {
-  const el = id(id_); el.innerHTML=`<span class="ph">${lbl}</span>`; el.classList.remove('done');
+function resetThumb(id_,lbl){
+  const el=document.getElementById(id_);
+  el.innerHTML=`<span class="ph">${lbl}</span>`; el.classList.remove('done');
 }
-function norm2(x,y) { const d=Math.sqrt(x*x+y*y)||1; return {x:x/d,y:y/d}; }
-function p2(n) { return String(n).padStart(2,'0'); }
+function n2(x,y){const d=Math.sqrt(x*x+y*y)||1;return{x:x/d,y:y/d}}
+function p2(n){return String(n).padStart(2,'0')}
 </script>
 </body>
 </html>
