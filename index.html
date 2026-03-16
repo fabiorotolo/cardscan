@@ -165,6 +165,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   <div class="panel">
     <div class="st ok" id="prevSt">FRONTE OK — CONTROLLA IL RITAGLIO</div>
     <button class="btn" id="prevNextBtn" onclick="onPreviewNext()">📷 SCATTA RETRO</button>
+    <button class="btn sec" id="prevFinishBtn" onclick="onPreviewFinish()" style="display:none">✓ TERMINA SCANSIONE (SOLO FRONTE)</button>
     <button class="btn sec" onclick="onEditCrop()">✏️ MODIFICA RITAGLIO</button>
   </div>
 </div>
@@ -659,7 +660,27 @@ function showPreview() {
   $prevTag.className       = 'tag ok';
   $prevSt.textContent      = isFront ? 'FRONTE OK — CONTROLLA IL RITAGLIO' : 'RETRO OK — CONTROLLA IL RITAGLIO';
   $prevNextBtn.textContent = isFront ? '📷 SCATTA RETRO' : '✓ GENERA IMMAGINE FINALE';
+  // Mostra "Termina" solo al fronte
+  document.getElementById('prevFinishBtn').style.display = isFront ? 'block' : 'none';
   $prevImg.src = cards[step].cropped.toDataURL('image/jpeg',0.95);
+}
+
+function onPreviewFinish() {
+  // Esporta solo il fronte come PNG singolo
+  stopCamera();
+  const fc = cards.front.cropped;
+  const PAD = 24, LBLH = 30;
+  $resultCanvas.width  = PAD*2 + fc.width;
+  $resultCanvas.height = PAD*2 + fc.height + LBLH;
+  const ctx = $resultCanvas.getContext('2d');
+  ctx.fillStyle = '#0a0b10';
+  ctx.fillRect(0, 0, $resultCanvas.width, $resultCanvas.height);
+  ctx.drawImage(fc, PAD, PAD);
+  ctx.strokeStyle = '#252635'; ctx.lineWidth = 1;
+  ctx.strokeRect(PAD, PAD, fc.width, fc.height);
+  ctx.fillStyle = '#585a70'; ctx.font = '11px "Courier New"'; ctx.textAlign = 'center';
+  ctx.fillText('FRONTE', PAD + fc.width/2, PAD + fc.height + 20);
+  showScreen('scrResult');
 }
 
 function onPreviewNext() {
