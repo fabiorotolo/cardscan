@@ -7,7 +7,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>CardScan</title>
-<script async src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js" onload="cvScriptLoaded()" onerror="cvLoadError()"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -1471,6 +1470,8 @@ function deleteContact(id) {
 }
 
 function p2(n){return String(n).padStart(2,'0');}
-
+</script>
+<!-- OpenCV caricato DOPO il JS principale così cvScriptLoaded è già definita -->
+<script async src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js" onload="cvScriptLoaded()" onerror="cvLoadError()"></script>
 </body>
 </html>
