@@ -1519,88 +1519,78 @@ async function manualEnrich() {
 }
 
 async function enrichContact(contact, forceOverwrite) {
-  // Determina URL del sito da usare (priorità: sito → dominio email)
-  const domain = contact.email ? contact.email.split('@')[1] : '';
-  if (!contact.sito && domain) contact.sito = domain;
-  const siteUrl = contact.sito
-    ? (contact.sito.startsWith('http') ? contact.sito : 'https://' + contact.sito)
-    : '';
-
-  // Query per ricerche
-  const query = [contact.azienda, domain?.split('.')[0]].filter(Boolean).join(' ');
-
-  console.log('Enriching:', query, '| site:', siteUrl);
-
-  // ── 1. SITO AZIENDALE (fonte migliore per aziende piccole italiane) ──
-  if (siteUrl) {
-    const fetched = await fetchSite(siteUrl);
-    if (fetched) {
-      const h = fetched;
-      // Descrizione meta
-      const desc = h.match(/content=["']([^"']{30,400})["'][^>]*name=["']description["']/i)?.[1]
-                || h.match(/name=["']description["'][^>]*content=["']([^"']{30,400})["']/i)?.[1]
-                || h.match(/<meta[^>]+og:description[^>]+content=["']([^"']{30,400})["']/i)?.[1];
-      if (desc && (forceOverwrite || !contact.note)) contact.note = desc.replace(/\s+/g,' ').trim();
-
-      // Nome azienda dal title
-      const title = h.match(/<title>([^<]{3,80})<\/title>/i)?.[1];
-      if (title && (forceOverwrite || !contact.azienda)) {
-        contact.azienda = title.split(/[\|\-–·]/)[0].trim();
-      }
-
-      // Telefono (cerca pattern italiani nel HTML)
-      const tel = h.match(/(?:tel[:\s]*)?(\+39[\s\-]?)?(?:0\d{1,4}[\s\-]?\d{5,8}|\d{3}[\s\-]?\d{3}[\s\-]?\d{4})/i)?.[0];
-      if (tel && (forceOverwrite || !contact.telefono)) contact.telefono = tel.replace(/tel[:\s]*/i,'').trim();
-
-      // Indirizzo (cerca Via/Corso/Piazza seguito da CAP)
-      const addr = h.match(/(?:Via|Viale|Corso|Piazza|Str\.|Loc\.)\s+[A-Za-zÀ-ÿ\s,\.0-9]{3,50}(?:\d{5}|\(\w{2}\))/i)?.[0];
-      if (addr && (forceOverwrite || !contact.indirizzo)) contact.indirizzo = addr.replace(/\s+/g,' ').trim();
-
-      // Email dalla homepage (più affidabile dell'OCR)
-      const emailOnSite = h.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/)?.[0];
-      if (emailOnSite && emailOnSite !== contact.email && (forceOverwrite || !contact.email))
-        contact.email = emailOnSite;
-
-      // Settore dal contenuto
-      if (forceOverwrite || !contact.settore)
-        contact.settore = guessSector(h.slice(0, 8000));
-    }
-  }
-
-  // ── 2. Wikipedia (per aziende grandi) ──
-  if ((forceOverwrite || !contact.note) && contact.azienda) {
-    try {
-      const r = await fetch(`https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(contact.azienda)}`);
-      if (r.ok) {
-        const w = await r.json();
-        if (w.extract?.length > 40) {
-          if (forceOverwrite || !contact.note) contact.note = w.extract.slice(0,300);
-          if (forceOverwrite || !contact.settore) contact.settore = guessSector(w.extract);
-        }
-      }
-    } catch(e) {}
-  }
-
-  // ── 3. Settore dal dominio email se ancora mancante ──
+  // Deduce settore dal dominio email se mancante
   if (!contact.settore)
     contact.settore = guessSector((contact.sito||'') + ' ' + (contact.email||'') + ' ' + (contact.azienda||''));
+  if (!contact.sito && contact.email)
+    contact.sito = contact.email.split('@')[1] || '';
+
+  // Query di ricerca
+  const query = [contact.azienda, contact.sito?.split('.')[0]]
+    .filter(Boolean).join(' ').trim();
+  if (!query) return;
+
+  try {
+    // Usa Claude API con web_search per trovare info sull'azienda
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 600,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        system: 'Sei un assistente che cerca informazioni su aziende italiane. Rispondi SOLO con un JSON valido, nessun testo extra.',
+        messages: [{
+          role: 'user',
+          content: `Cerca informazioni sull'azienda "${query}" ${contact.email ? '(email: '+contact.email+')' : ''}.
+Restituisci SOLO questo JSON (stringa vuota se non trovato):
+{"descrizione":"max 200 caratteri sull'attività dell'azienda","settore":"settore merceologico","indirizzo":"indirizzo completo","telefono":"numero telefono","sito":"sito web senza http"}`
+        }]
+      })
+    });
+
+    const data = await resp.json();
+    // Estrai il testo dalla risposta (può essere in blocchi text o tool_result)
+    let text = '';
+    if (data.content) {
+      for (const block of data.content) {
+        if (block.type === 'text') text += block.text;
+      }
+    }
+    // Pulisci e parsa il JSON
+    const clean = text.replace(/```json|```/g,'').trim();
+    const start = clean.indexOf('{'), end = clean.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      const found = JSON.parse(clean.slice(start, end+1));
+      console.log('Claude found:', found);
+      if (found.descrizione && (forceOverwrite || !contact.note))
+        contact.note = found.descrizione;
+      if (found.settore && (forceOverwrite || !contact.settore))
+        contact.settore = found.settore;
+      if (found.indirizzo && (forceOverwrite || !contact.indirizzo))
+        contact.indirizzo = found.indirizzo;
+      if (found.telefono && (forceOverwrite || !contact.telefono))
+        contact.telefono = found.telefono;
+      if (found.sito && (forceOverwrite || !contact.sito))
+        contact.sito = found.sito;
+    }
+  } catch(e) { console.log('Enrich failed:', e.message); }
 }
 
-// Scarica HTML del sito tramite proxy CORS (prova 3 proxy in cascata)
+// Scarica HTML del sito (usato solo se api.anthropic.com non disponibile)
 async function fetchSite(url) {
   const proxies = [
     u => `https://api.allorigins.win/get?url=${encodeURIComponent(u)}`,
-    u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+    u => `https://corsproxy.io/?${encodeURIComponent(u)}`
   ];
   for (const makeUrl of proxies) {
     try {
-      const resp = await fetch(makeUrl(url), { signal: AbortSignal.timeout(7000) });
-      if (!resp.ok) continue;
-      const data = await resp.json().catch(() => null);
-      const html = data?.contents || await resp.text().catch(() => '');
-      if (html && html.length > 100) { console.log('Proxy OK, html len:', html.length); return html; }
-    } catch(e) { console.log('Proxy failed:', e.message); }
+      const r = await fetch(makeUrl(url), { signal: AbortSignal.timeout(5000) });
+      if (!r.ok) continue;
+      const d = await r.json().catch(() => null);
+      const h = d?.contents;
+      if (h?.length > 100) return h;
+    } catch(e) {}
   }
   return null;
 }
