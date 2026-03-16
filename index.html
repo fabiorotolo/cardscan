@@ -498,8 +498,7 @@ function showAdjust(editing) {
 }
 
 /* ═══════════════════════════════════════
-   POSIZIONA ANGOLI SUL RIQUADRO GUIDA
-   (nessun rilevamento automatico — sempre preciso)
+   DETECT SUL FERMO IMMAGINE
 ═══════════════════════════════════════ */
 function getVideoCoverMap() {
   const dw = $video.clientWidth  || window.innerWidth;
@@ -514,43 +513,117 @@ function getVideoCoverMap() {
 
 function detectOnFrozen() {
   const map = getVideoCoverMap();
-  const { dw, dh, vw, vh } = map;
 
-  // Riquadro guida in coordinate DISPLAY (identico a drawGuide)
-  const mh   = dw * 0.08;
-  const gw_d = dw - mh * 2;
+  // Rettangolo guida in coordinate display
+  const mh   = map.dw * 0.08;
+  const gw_d = map.dw - mh * 2;
   const gh_d = gw_d / 1.75;
   const gx_d = mh;
-  const gy_d = (dh - gh_d) / 2;
+  const gy_d = (map.dh - gh_d) / 2;
 
-  // Converti display → video frame → adjCanvas
+  // Converti in coordinate video (frame catturato)
+  const vx = Math.max(0, Math.round(map.cropX + gx_d / map.scale));
+  const vy = Math.max(0, Math.round(map.cropY + gy_d / map.scale));
+  const vw = Math.min($capCanvas.width  - vx, Math.round(gw_d / map.scale));
+  const vh = Math.min($capCanvas.height - vy, Math.round(gh_d / map.scale));
+
+  let src=null, cropped=null, gray=null, blurred=null, edges=null, contours=null, hierarchy=null;
+  let bestCorners = null;
+
+  try {
+    src = cv.imread($capCanvas);
+
+    // ── Lavora SOLO dentro il rettangolo guida ──
+    const roiRect = new cv.Rect(vx, vy, vw, vh);
+    cropped = src.roi(roiRect);
+
+    gray     = new cv.Mat();
+    blurred  = new cv.Mat();
+    edges    = new cv.Mat();
+    contours = new cv.MatVector();
+    hierarchy= new cv.Mat();
+
+    cv.cvtColor(cropped, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+
+    // Equalizza per migliorare contrasto bordi
+    const eq = new cv.Mat();
+    cv.equalizeHist(blurred, eq);
+
+    // Multi-pass Canny
+    let best = null, maxArea = 0;
+
+    for (const [lo, hi] of [[30,90],[60,150],[90,210]]) {
+      cv.Canny(eq, edges, lo, hi);
+
+      // Dilata per chiudere bordi aperti
+      const k = cv.Mat.ones(3, 3, cv.CV_8U);
+      cv.dilate(edges, edges, k);
+      cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k);
+      k.delete();
+
+      cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt  = contours.get(i);
+        const peri = cv.arcLength(cnt, true);
+        const approx = new cv.Mat();
+        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+
+        if (approx.rows === 4) {
+          const area = cv.contourArea(approx);
+          if (area > maxArea && area > vw * vh * 0.05) {
+            maxArea = area;
+            if (best) best.delete();
+            best = approx.clone();
+          }
+        }
+        approx.delete();
+        cnt.delete();
+      }
+
+      eq.delete();
+      if (best && maxArea > vw * vh * 0.15) break;
+    }
+
+    if (best) {
+      // Aggiungi offset ROI → coordinate frame video intero
+      bestCorners = [];
+      for (let i = 0; i < 4; i++) {
+        bestCorners.push({
+          x: best.data32S[i*2]   + vx,
+          y: best.data32S[i*2+1] + vy
+        });
+      }
+      best.delete();
+    }
+
+  } catch(e) { console.error('CV:', e); }
+  finally { [src, cropped, gray, blurred, edges, contours, hierarchy]
+    .forEach(m => { try { if(m) m.delete(); } catch(_){} }); }
+
+  // Converti video coords → adjCanvas coords
   const { rw, rh, ox, oy } = getBox();
+  const iw = $capCanvas.width, ih = $capCanvas.height;
 
   const clamp = p => ({
-    x: Math.max(ox + 1, Math.min(ox + rw - 1, p.x)),
-    y: Math.max(oy + 1, Math.min(oy + rh - 1, p.y))
+    x: Math.max(ox+1, Math.min(ox+rw-1, p.x * (rw/iw) + ox)),
+    y: Math.max(oy+1, Math.min(oy+rh-1, p.y * (rh/ih) + oy))
   });
 
-  const d2adj = (dx, dy) => {
-    // display → video coords
-    const vx = map.cropX + dx / map.scale;
-    const vy = map.cropY + dy / map.scale;
-    // video → adjCanvas coords
-    return clamp({
-      x: vx * (rw / vw) + ox,
-      y: vy * (rh / vh) + oy
-    });
-  };
-
-  // Posiziona i 4 angoli esattamente sul riquadro guida
-  corners = [
-    d2adj(gx_d,        gy_d),
-    d2adj(gx_d + gw_d, gy_d),
-    d2adj(gx_d + gw_d, gy_d + gh_d),
-    d2adj(gx_d,        gy_d + gh_d)
-  ];
-
-  setSt($adjSt, 'TRASCINA GLI ANGOLI PER AGGIUSTARE IL RITAGLIO', 'ok');
+  if (bestCorners) {
+    corners = orderPts(bestCorners).map(clamp);
+    setSt($adjSt, 'BORDI RILEVATI — TRASCINA GLI ANGOLI PER AGGIUSTARE', 'ok');
+  } else {
+    // Fallback: posiziona angoli sul riquadro guida
+    corners = [
+      { x: vx,    y: vy    },
+      { x: vx+vw, y: vy    },
+      { x: vx+vw, y: vy+vh },
+      { x: vx,    y: vy+vh }
+    ].map(clamp);
+    setSt($adjSt, 'BORDI NON TROVATI — SPOSTA GLI ANGOLI MANUALMENTE', 'warn');
+  }
   drawAdj(null);
 }
 
