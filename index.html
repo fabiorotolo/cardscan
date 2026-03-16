@@ -197,21 +197,16 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
     border-top:1px solid var(--border)">
     <div style="font-size:14px;letter-spacing:4px;color:var(--accent);margin-bottom:18px">⚙️ IMPOSTAZIONI</div>
 
-    <div style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:8px">SALVATAGGIO IMMAGINE</div>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-        <input type="radio" name="saveMode" value="overlay" style="accent-color:var(--accent)">
-        <span style="font-size:11px;letter-spacing:1px;color:var(--text)">MOSTRA IMMAGINE → TIENI PREMUTO (iOS)</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-        <input type="radio" name="saveMode" value="share" style="accent-color:var(--accent)">
-        <span style="font-size:11px;letter-spacing:1px;color:var(--text)">FOGLIO DI CONDIVISIONE iOS</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-        <input type="radio" name="saveMode" value="download" style="accent-color:var(--accent)">
-        <span style="font-size:11px;letter-spacing:1px;color:var(--text)">DOWNLOAD DIRETTO (ANDROID/PC)</span>
-      </label>
+    <div style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:8px">CARTELLA DI SALVATAGGIO</div>
+    <div style="font-size:11px;color:var(--text);letter-spacing:1px;margin-bottom:8px">
+      📁 <span id="folderName">NON IMPOSTATA</span>
     </div>
+    <button onclick="changeSaveFolder()"
+      style="display:block;width:100%;padding:12px;background:transparent;margin-bottom:18px;
+      border:1px solid var(--accent);color:var(--accent);font-family:var(--font);
+      font-size:11px;letter-spacing:3px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+      📂 SCEGLI CARTELLA
+    </button>
 
     <div style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:8px">MIGLIORAMENTO IMMAGINE</div>
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:18px">
@@ -219,8 +214,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
       <span style="font-size:11px;letter-spacing:1px;color:var(--text)">AUTO-CONTRASTO DOPO RITAGLIO</span>
     </label>
 
-    <div style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:8px">
-      ℹ️ SU IOS NON È POSSIBILE SCEGLIERE UNA CARTELLA — LE IMMAGINI VENGONO SALVATE NEL RULLINO FOTO O IN FILE
+    <div style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:14px">
+      ℹ️ La scelta cartella funziona su Chrome. Su Safari la cartella viene ricordata solo nella sessione corrente.
     </div>
 
     <button onclick="closeSettings()"
@@ -914,59 +909,103 @@ function buildResult() {
 let settings = { saveMode: 'overlay', enhance: true };
 
 function openSettings() {
-  // Carica impostazioni salvate
   try { const s=JSON.parse(localStorage.getItem('cardscan_settings')||'{}'); Object.assign(settings,s); } catch(_){}
   const modal = document.getElementById('settingsModal');
   modal.style.display = 'flex';
-  document.querySelector(`input[name="saveMode"][value="${settings.saveMode}"]`).checked = true;
-  document.getElementById('enhanceToggle').checked = settings.enhance;
+  document.getElementById('enhanceToggle').checked = settings.enhance !== false;
+  // Mostra nome cartella salvata
+  const savedName = savedDirHandle ? savedDirHandle.name : (localStorage.getItem('cardscan_dir') || 'NON IMPOSTATA');
+  document.getElementById('folderName').textContent = savedName;
 }
 function closeSettings() {
-  settings.saveMode = document.querySelector('input[name="saveMode"]:checked').value;
-  settings.enhance  = document.getElementById('enhanceToggle').checked;
+  settings.enhance = document.getElementById('enhanceToggle').checked;
   try { localStorage.setItem('cardscan_settings', JSON.stringify(settings)); } catch(_){}
   document.getElementById('settingsModal').style.display = 'none';
 }
-// Carica impostazioni all'avvio
-try { const s=JSON.parse(localStorage.getItem('cardscan_settings')||'{}'); Object.assign(settings,s); } catch(_){}
+
+/* ═══════════════════════════════════════
+   SALVATAGGIO CON SCELTA CARTELLA
+═══════════════════════════════════════ */
+let savedDirHandle = null; // cartella scelta, riusata nelle sessioni successive
 
 async function downloadResult() {
   const now = new Date();
   const ts  = [now.getFullYear(),p2(now.getMonth()+1),p2(now.getDate()),'_',p2(now.getHours()),p2(now.getMinutes())].join('');
   const filename = `biglietto_${ts}.png`;
+  const blob = await new Promise(res => $resultCanvas.toBlob(res, 'image/png'));
 
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  // ── File System Access API (Chrome desktop, Chrome Android, Chrome iOS) ──
+  if ('showSaveFilePicker' in window) {
+    try {
+      const fh = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: 'PNG Image', accept: { 'image/png': ['.png'] } }]
+      });
+      const writable = await fh.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      showToast('✓ SALVATO');
+      return;
+    } catch(e) {
+      if (e.name === 'AbortError') return;
+      // Fallback se permesso negato
+    }
+  }
 
-  if (!isIOS) {
-    // Android / desktop → download diretto nella cartella Download
-    const blob = await new Promise(res => $resultCanvas.toBlob(res, 'image/png'));
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); document.body.removeChild(a); }, 1000);
+  // ── Directory picker: salva nella cartella scelta ──
+  if ('showDirectoryPicker' in window) {
+    try {
+      // Riusa la cartella se già scelta, altrimenti chiedi
+      if (!savedDirHandle) {
+        savedDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        try { localStorage.setItem('cardscan_dir', savedDirHandle.name); } catch(_){}
+      }
+      const fh = await savedDirHandle.getFileHandle(filename, { create: true });
+      const writable = await fh.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      showToast('✓ SALVATO IN: ' + savedDirHandle.name);
+      return;
+    } catch(e) {
+      if (e.name === 'AbortError') return;
+      savedDirHandle = null; // resetta se errore
+    }
+  }
+
+  // ── Fallback: download classico (salva in Download del browser) ──
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); document.body.removeChild(a); }, 1000);
+}
+
+// Pulsante "Cambia cartella" nelle impostazioni
+async function changeSaveFolder() {
+  if (!('showDirectoryPicker' in window)) {
+    alert('Il tuo browser non supporta la scelta della cartella.\nUsa Chrome per questa funzione.');
     return;
   }
-
-  // iOS: non esiste accesso diretto alla cartella Download dal browser.
-  // Usiamo Web Share API → l'utente sceglie "Salva in File" → cartella Download
   try {
-    const blob = await new Promise(res => $resultCanvas.toBlob(res, 'image/png'));
-    const file = new File([blob], filename, { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: filename });
-      return;
-    }
+    savedDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    const name = savedDirHandle.name;
+    try { localStorage.setItem('cardscan_dir', name); } catch(_){}
+    document.getElementById('folderName').textContent = name;
+    showToast('✓ CARTELLA: ' + name);
   } catch(e) {
-    if (e.name === 'AbortError') return; // utente ha annullato
+    if (e.name !== 'AbortError') alert('Errore: ' + e.message);
   }
+}
 
-  // Fallback iOS: mostra immagine → tieni premuto → Salva
-  const blob2 = await new Promise(res => $resultCanvas.toBlob(res, 'image/png'));
-  const url2  = URL.createObjectURL(blob2);
-  showSaveInstructions(url2, filename);
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);' +
+    'background:#3df5c1;color:#08090d;font-family:"Courier New";font-size:11px;' +
+    'letter-spacing:2px;padding:10px 20px;z-index:9999;pointer-events:none;' +
+    'white-space:nowrap;border-radius:2px';
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
 }
 
 function showSaveInstructions(url, filename) {
