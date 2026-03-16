@@ -284,6 +284,17 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
     border-top:1px solid var(--border)">
     <div style="font-size:14px;letter-spacing:4px;color:var(--accent);margin-bottom:18px">⚙️ IMPOSTAZIONI</div>
 
+    <div style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:6px">🤖 CHIAVE API ANTHROPIC (per ricerca web)</div>
+    <input id="apiKeyInput" type="password" placeholder="sk-ant-api03-..."
+      style="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);
+        color:var(--text);font-family:var(--font);font-size:11px;letter-spacing:1px;
+        outline:none;margin-bottom:6px">
+    <div style="font-size:9px;color:var(--dim);margin-bottom:4px;letter-spacing:1px">
+      Ottieni gratis su <b style="color:var(--accent)">console.anthropic.com</b> → API Keys → Create Key<br>
+      La chiave è salvata solo sul tuo telefono, non viene inviata a nessuno.
+    </div>
+    <div id="apiKeyStatus" style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:18px"></div>
+
     <div style="font-size:10px;letter-spacing:2px;color:var(--dim);margin-bottom:8px">CARTELLA DI SALVATAGGIO</div>
     <div style="font-size:11px;color:var(--text);letter-spacing:1px;margin-bottom:8px">
       📁 <span id="folderName">NON IMPOSTATA</span>
@@ -1069,17 +1080,37 @@ let settings = { saveMode: 'overlay', enhance: true };
 
 function openSettings() {
   try { const s=JSON.parse(localStorage.getItem('cardscan_settings')||'{}'); Object.assign(settings,s); } catch(_){}
-  const modal = document.getElementById('settingsModal');
-  modal.style.display = 'flex';
+  document.getElementById('settingsModal').style.display = 'flex';
   document.getElementById('enhanceToggle').checked = settings.enhance !== false;
-  // Mostra nome cartella salvata
   const savedName = savedDirHandle ? savedDirHandle.name : (localStorage.getItem('cardscan_dir') || 'NON IMPOSTATA');
   document.getElementById('folderName').textContent = savedName;
+  // Mostra chiave API (mascherata)
+  const key = localStorage.getItem('cardscan_apikey') || '';
+  const inp = document.getElementById('apiKeyInput');
+  inp.dataset.full = key;
+  inp.value = key ? key.slice(0,14) + '...' + key.slice(-4) : '';
+  inp.addEventListener('focus', function(){ if(this.dataset.full) this.value = this.dataset.full; });
+  inp.addEventListener('blur',  function(){ if(this.value?.startsWith('sk-ant')) this.dataset.full = this.value; });
+  const st = document.getElementById('apiKeyStatus');
+  st.textContent = key ? '✓ CHIAVE IMPOSTATA — RICERCA WEB ATTIVA' : '⚠ NESSUNA CHIAVE — RICERCA WEB DISABILITATA';
+  st.style.color = key ? 'var(--accent)' : 'var(--warn)';
 }
+
 function closeSettings() {
   settings.enhance = document.getElementById('enhanceToggle').checked;
   try { localStorage.setItem('cardscan_settings', JSON.stringify(settings)); } catch(_){}
+  // Salva chiave API se valida
+  const inp = document.getElementById('apiKeyInput');
+  const key = inp.dataset.full || inp.value || '';
+  if (key.startsWith('sk-ant')) {
+    localStorage.setItem('cardscan_apikey', key);
+    showToast('✓ CHIAVE API SALVATA');
+  }
   document.getElementById('settingsModal').style.display = 'none';
+}
+
+function getApiKey() {
+  return localStorage.getItem('cardscan_apikey') || '';
 }
 
 /* ═══════════════════════════════════════
@@ -1478,8 +1509,10 @@ async function manualEnrich() {
     if (currentContact) currentContact[inp.dataset.key] = inp.value;
   });
 
-  const btn = document.getElementById('aiSearchBtn');
-  btn.textContent = '⏳ RICERCA IN CORSO...';
+  if (!getApiKey()) {
+    setSt(document.getElementById('aiSt'), '⚙️ IMPOSTA LA CHIAVE API IN IMPOSTAZIONI PER CERCARE SUL WEB', 'warn');
+    return;
+  }
   btn.disabled = true;
   setSt(document.getElementById('aiSt'), 'RICERCA SUL WEB IN CORSO...', '');
 
@@ -1519,62 +1552,76 @@ async function manualEnrich() {
 }
 
 async function enrichContact(contact, forceOverwrite) {
-  // Deduce settore dal dominio email se mancante
   if (!contact.settore)
     contact.settore = guessSector((contact.sito||'') + ' ' + (contact.email||'') + ' ' + (contact.azienda||''));
   if (!contact.sito && contact.email)
     contact.sito = contact.email.split('@')[1] || '';
 
-  // Query di ricerca
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.log('No API key — skipping web enrich');
+    return; // Nessuna chiave, salta silenziosamente
+  }
+
   const query = [contact.azienda, contact.sito?.split('.')[0]]
     .filter(Boolean).join(' ').trim();
   if (!query) return;
 
+  console.log('Enriching with Claude:', query);
+
   try {
-    // Usa Claude API con web_search per trovare info sull'azienda
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 600,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: 'Sei un assistente che cerca informazioni su aziende italiane. Rispondi SOLO con un JSON valido, nessun testo extra.',
+        system: 'Cerca informazioni aziendali e rispondi SOLO con JSON valido, nessun testo extra.',
         messages: [{
           role: 'user',
-          content: `Cerca informazioni sull'azienda "${query}" ${contact.email ? '(email: '+contact.email+')' : ''}.
-Restituisci SOLO questo JSON (stringa vuota se non trovato):
-{"descrizione":"max 200 caratteri sull'attività dell'azienda","settore":"settore merceologico","indirizzo":"indirizzo completo","telefono":"numero telefono","sito":"sito web senza http"}`
+          content: `Cerca informazioni sull'azienda: "${query}"${contact.email ? ' (sito: '+contact.email.split('@')[1]+')' : ''}.
+Rispondi SOLO con questo JSON (stringa vuota se non trovato):
+{"descrizione":"cosa fa l'azienda, max 200 caratteri","settore":"settore merceologico","indirizzo":"indirizzo completo con CAP e città","telefono":"numero di telefono","sito":"sito web senza https://"}`
         }]
       })
     });
 
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.log('API error:', resp.status, err?.error?.message);
+      return;
+    }
+
     const data = await resp.json();
-    // Estrai il testo dalla risposta (può essere in blocchi text o tool_result)
     let text = '';
-    if (data.content) {
-      for (const block of data.content) {
-        if (block.type === 'text') text += block.text;
-      }
+    for (const block of (data.content || [])) {
+      if (block.type === 'text') text += block.text;
     }
-    // Pulisci e parsa il JSON
-    const clean = text.replace(/```json|```/g,'').trim();
-    const start = clean.indexOf('{'), end = clean.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      const found = JSON.parse(clean.slice(start, end+1));
-      console.log('Claude found:', found);
-      if (found.descrizione && (forceOverwrite || !contact.note))
-        contact.note = found.descrizione;
-      if (found.settore && (forceOverwrite || !contact.settore))
-        contact.settore = found.settore;
-      if (found.indirizzo && (forceOverwrite || !contact.indirizzo))
-        contact.indirizzo = found.indirizzo;
-      if (found.telefono && (forceOverwrite || !contact.telefono))
-        contact.telefono = found.telefono;
-      if (found.sito && (forceOverwrite || !contact.sito))
-        contact.sito = found.sito;
-    }
-  } catch(e) { console.log('Enrich failed:', e.message); }
+
+    const start = text.indexOf('{'), end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) { console.log('No JSON in response:', text.slice(0,200)); return; }
+
+    const found = JSON.parse(text.slice(start, end+1));
+    console.log('Enrich result:', found);
+
+    if (found.descrizione?.length > 5 && (forceOverwrite || !contact.note))
+      contact.note = found.descrizione;
+    if (found.settore?.length > 2 && (forceOverwrite || !contact.settore))
+      contact.settore = found.settore;
+    if (found.indirizzo?.length > 5 && (forceOverwrite || !contact.indirizzo))
+      contact.indirizzo = found.indirizzo;
+    if (found.telefono?.length > 5 && (forceOverwrite || !contact.telefono))
+      contact.telefono = found.telefono;
+    if (found.sito?.length > 3 && (forceOverwrite || !contact.sito))
+      contact.sito = found.sito;
+
+  } catch(e) { console.log('Enrich error:', e.message); }
 }
 
 // Scarica HTML del sito (usato solo se api.anthropic.com non disponibile)
