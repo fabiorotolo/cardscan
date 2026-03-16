@@ -1292,7 +1292,15 @@ async function analyzeWithAI() {
     contact.imgFront  = imgCanvas.toDataURL('image/jpeg', 0.55);
     contact.imgResult = $resultCanvas.toDataURL('image/jpeg', 0.55);
     contact.savedAt   = new Date().toLocaleDateString('it-IT');
-    showForm(contact, 'CONTROLLA I CAMPI E SALVA', 'ok');
+
+    // Mostra subito il form con dati OCR
+    showForm(contact, 'RICERCA INFO IN CORSO...', '');
+
+    // Arricchisci in background con ricerca web
+    enrichContact(contact).then(() => {
+      renderAIFields(contact);
+      setSt(document.getElementById('aiSt'), 'CONTROLLA I CAMPI E SALVA', 'ok');
+    });
 
   } catch(e) {
     console.error('OCR error:', e);
@@ -1394,6 +1402,78 @@ function guessSector(text) {
     if (kw.some(k => t.includes(k))) return sector;
   }
   return '';
+}
+
+/* ═══════════════════════════════════════
+   WEB ENRICHMENT (DuckDuckGo + Wikipedia)
+═══════════════════════════════════════ */
+async function enrichContact(contact) {
+  const query = [contact.azienda, contact.nome].filter(Boolean).join(' ').trim();
+  if (!query) return;
+
+  try {
+    // ── 1. DuckDuckGo Instant Answer API ──
+    const ddUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
+    const ddResp = await fetch(ddUrl);
+    const dd = await ddResp.json();
+
+    // Abstract (descrizione azienda)
+    if (dd.AbstractText && dd.AbstractText.length > 20) {
+      if (!contact.note) contact.note = dd.AbstractText.slice(0, 300);
+    }
+    // Tipo entità (es. "company", "person")
+    if (dd.Type === 'A' && dd.AbstractText) {
+      // Prova a dedurre settore dal testo DuckDuckGo
+      if (!contact.settore) contact.settore = guessSector(dd.AbstractText);
+    }
+    // Sito web dal risultato DuckDuckGo
+    if (!contact.sito && dd.AbstractURL) {
+      contact.sito = dd.AbstractURL.replace(/^https?:\/\//, '');
+    }
+    // Indirizzo dal risultato Infobox
+    if (dd.Infobox && dd.Infobox.content) {
+      for (const item of dd.Infobox.content) {
+        if (/address|sede|headquarters/i.test(item.label) && !contact.indirizzo) {
+          contact.indirizzo = item.value;
+        }
+        if (/phone|telefono/i.test(item.label) && !contact.telefono) {
+          contact.telefono = item.value;
+        }
+        if (/industry|settore|sector/i.test(item.label) && !contact.settore) {
+          contact.settore = item.value;
+        }
+      }
+    }
+  } catch(e) { console.log('DuckDuckGo enrich failed:', e.message); }
+
+  // ── 2. Wikipedia (solo se ha trovato poco) ──
+  if (!contact.note && contact.azienda) {
+    try {
+      const wUrl = `https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(contact.azienda)}`;
+      const wResp = await fetch(wUrl);
+      if (wResp.ok) {
+        const wiki = await wResp.json();
+        if (wiki.extract && wiki.extract.length > 30) {
+          contact.note = wiki.extract.slice(0, 300);
+          if (!contact.settore) contact.settore = guessSector(wiki.extract);
+        }
+      }
+    } catch(e) { console.log('Wikipedia enrich failed:', e.message); }
+  }
+
+  // ── 3. Verifica sito web (fetch homepage title) ──
+  if (contact.sito && !contact.note) {
+    try {
+      const sito = contact.sito.startsWith('http') ? contact.sito : 'https://' + contact.sito;
+      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(sito)}`;
+      const pResp = await fetch(proxy, { signal: AbortSignal.timeout(5000) });
+      const pData = await pResp.json();
+      // Estrai description dalla homepage
+      const descMatch = pData.contents?.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{20,200})["']/i)
+                     || pData.contents?.match(/<meta[^>]+content=["']([^"']{20,200})["'][^>]+name=["']description["']/i);
+      if (descMatch) contact.note = descMatch[1];
+    } catch(e) { console.log('Site fetch failed:', e.message); }
+  }
 }
 
 function renderAIFields(contact) {
