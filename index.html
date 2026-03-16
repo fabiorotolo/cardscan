@@ -1326,63 +1326,122 @@ function loadScript(src) {
   });
 }
 
-// Parser del testo OCR → campi strutturati
+// Parser del testo OCR → campi strutturati (versione robusta)
 function parseBusinessCard(text) {
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 1);
-  const full  = text;
+  // Normalizza: rimuovi caratteri spazzatura OCR comuni, mantieni struttura righe
+  const clean = text
+    .replace(/[|©®™°•·]/g, ' ')   // simboli OCR spurii
+    .replace(/\b[Cc]\.\s*/g, '')    // "C." che OCR legge per icone
+    .replace(/\bwww\b/gi, 'www')    // normalizza
+    .replace(/[ \t]+/g, ' ');
 
-  // Regex
-  const emailRx   = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-  const phoneRx   = /(?:\+?\d[\d\s\-().]{6,20}\d)/g;
-  const urlRx     = /(?:https?:\/\/)?(?:www\.)?[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}(?:\/\S*)?/g;
-  const capRx     = /\b\d{5}\b/;
-  const pIvaRx    = /(?:P\.?\s*IVA|C\.?F\.?|VAT)[:\s]*([A-Z0-9]{11,16})/i;
+  const lines = clean.split('\n')
+    .map(l => l.trim())
+    .filter(l => l.length > 1);
 
-  const emails   = [...(full.match(emailRx)  || [])];
-  const phones   = [...(full.match(phoneRx)  || [])].filter(p => p.replace(/\D/g,'').length >= 7);
-  const urls     = [...(full.match(urlRx)    || [])].filter(u => !emails.some(e => u.includes(e)));
+  // ── 1. Estrai dati strutturati con regex ──
+  const emailRx = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/;
+  const phoneRx = /(?:\+?\d{1,3}[\s\-.]?)?\(?\d{2,4}\)?[\s\-.]?\d{3,4}[\s\-.]?\d{3,6}/;
+  const urlRx   = /(?:https?:\/\/)?(?:www\.)[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}(?:[^\s<>"']*)?/;
+  const capRx   = /\b\d{5}\b/;
+  const pivaRx  = /(?:P\.?\s*[Ii]va|C\.?F\.?|VAT)[:\s]*([A-Za-z0-9]{11,16})/;
+  const addrRx  = /(?:Via|Viale|Corso|Piazza|Str\.|V\.le|Loc\.|Fraz\.|Contrada)\s+[A-Za-zÀ-ÿ\s,\.0-9]+/i;
 
-  // Indirizzo: riga con CAP o parole tipo Via/Viale/Corso/Piazza
-  const addrLine = lines.find(l =>
-    capRx.test(l) || /\b(Via|Viale|Corso|Piazza|Str\.|Loc\.|Fraz\.)/i.test(l)
-  ) || '';
+  let email='', phone='', sito='', indirizzo='', piva='';
+  const usedLines = new Set();
 
-  // Azienda: spesso la riga più lunga in maiuscolo nei primi 5 righi
-  const companyLine = lines.slice(0,6).find(l =>
-    l.length > 4 && l === l.toUpperCase() && !/^[\d\s\W]+$/.test(l)
-  ) || '';
+  lines.forEach((l, i) => {
+    if (!email   && emailRx.test(l))  { email   = l.match(emailRx)[0]; usedLines.add(i); }
+    if (!sito    && urlRx.test(l))    { sito    = l.match(urlRx)[0].replace(/^https?:\/\//,''); usedLines.add(i); }
+    if (!phone   && phoneRx.test(l))  { phone   = l.match(phoneRx)[0].trim(); usedLines.add(i); }
+    if (!indirizzo && addrRx.test(l)) { indirizzo = l.match(addrRx)[0].trim(); usedLines.add(i); }
+    if (!piva    && pivaRx.test(l))   { piva    = l; usedLines.add(i); }
+    // Riga con solo CAP → parte di indirizzo
+    if (!indirizzo && capRx.test(l) && l.length < 60) { indirizzo = l; usedLines.add(i); }
+  });
 
-  // Nome: riga con due parole in Title Case (non azienda, non indirizzo)
-  const nameLine = lines.find(l => {
-    if (l === companyLine || l === addrLine) return false;
-    const words = l.split(/\s+/);
-    return words.length >= 2 && words.length <= 4 &&
-      words.every(w => w.length > 1 && /^[A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]/.test(w));
-  }) || '';
+  // Aggiungi la riga successiva all'indirizzo se contiene CAP o city
+  if (indirizzo) {
+    const addrIdx = lines.findIndex(l => l.includes(indirizzo.slice(0,10)));
+    if (addrIdx >= 0 && addrIdx+1 < lines.length && !usedLines.has(addrIdx+1)) {
+      const next = lines[addrIdx+1];
+      if (capRx.test(next) || /\bItaly\b|\bItalia\b/i.test(next)) {
+        indirizzo += ', ' + next;
+        usedLines.add(addrIdx+1);
+      }
+    }
+  }
 
-  // Ruolo: riga con parole tipiche di ruolo
-  const ruoloLine = lines.find(l =>
-    /\b(direttore|director|manager|responsabile|titolare|socio|founder|ceo|cto|sales|commerciale|tecnico|ingegnere|ing\.|arch\.|dott\.|dr\.?|amministratore|presidente|partner|consulente)\b/i.test(l)
-    && l !== nameLine
-  ) || '';
+  // ── 2. Dalle righe rimanenti: trova Nome, Azienda, Ruolo ──
+  const remaining = lines.filter((_, i) => !usedLines.has(i));
 
-  // Settore dedotto da parole chiave nel testo
-  const settore = guessSector(full);
+  // Azienda: riga tutta MAIUSCOLA (3+ lettere, non numero, non indirizzo)
+  let azienda = '';
+  const aziendaIdx = remaining.findIndex(l => {
+    const stripped = l.replace(/[^a-zA-Z]/g,'');
+    return stripped.length >= 2
+      && stripped === stripped.toUpperCase()
+      && !phoneRx.test(l) && !emailRx.test(l)
+      && stripped.length <= 30;
+  });
+  if (aziendaIdx >= 0) {
+    azienda = remaining[aziendaIdx].trim();
+    remaining.splice(aziendaIdx, 1);
+  }
 
-  // P.IVA / CF
-  const pIvaMatch = full.match(pIvaRx);
-  const piva = pIvaMatch ? pIvaMatch[0] : '';
+  // Ruolo: riga con keyword ruolo OPPURE due parole in Title Case con keyword
+  const ruoloKeywords = /\b(manager|director|direttore|responsabile|titolare|socio|founder|ceo|cto|coo|presidente|sales|commerciale|tecnico|ingegnere|ing\.|arch\.|dott\.|dr\.?|amministratore|partner|consulente|executive|officer|head|chief)\b/i;
+  let ruolo = '';
+  const ruoloIdx = remaining.findIndex(l => ruoloKeywords.test(l) && l.length < 60);
+  if (ruoloIdx >= 0) {
+    // Pulisci il ruolo da frammenti OCR (es. "l General Manager Is AF" → "General Manager")
+    ruolo = remaining[ruoloIdx]
+      .replace(/\b[A-Z]{1,2}\b/g, '')       // rimuovi lettere singole/doppie isolate
+      .replace(/[^a-zA-ZÀ-ÿ\s\-\/\.]/g,' ')
+      .replace(/\s{2,}/g,' ').trim();
+    remaining.splice(ruoloIdx, 1);
+  }
+
+  // Nome: prima riga con 2-4 parole in Title Case rimasta
+  // (esclude righe con solo maiuscole = azienda)
+  let nome = '';
+  const nameIdx = remaining.findIndex(l => {
+    const words = l.split(/\s+/).filter(w => w.length > 1);
+    return words.length >= 2 && words.length <= 4
+      && words.every(w => /^[A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]/.test(w))
+      && !ruoloKeywords.test(l)
+      && l.length < 50;
+  });
+  if (nameIdx >= 0) {
+    nome = remaining[nameIdx].trim();
+    remaining.splice(nameIdx, 1);
+  }
+
+  // Se non trovato nome ma trovato ruolo sulla stessa riga (es. "Gianni Turcatti General Manager")
+  if (!nome && !ruolo) {
+    const combo = remaining.find(l => l.length > 5 && l.length < 60);
+    if (combo) {
+      const m = combo.match(/^([A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]+(?:\s+[A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]+)+)\s+(.+)$/);
+      if (m) { nome = m[1]; ruolo = m[2]; }
+    }
+  }
+
+  // Azienda fallback: estrai dal dominio email
+  if (!azienda && email) {
+    const dom = email.match(/@([^.@]+)/);
+    if (dom) azienda = dom[1].split('-').map(w => w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
+  }
 
   return {
-    nome:      nameLine,
-    azienda:   companyLine,
-    ruolo:     ruoloLine,
-    settore:   settore,
-    indirizzo: addrLine,
-    telefono:  phones.join(' / '),
-    email:     emails.join(', '),
-    sito:      urls.filter(u => !emails.some(e => u.includes(e))).join(', '),
-    note:      piva || ''
+    nome:      nome,
+    azienda:   azienda,
+    ruolo:     ruolo,
+    settore:   guessSector(text),
+    indirizzo: indirizzo,
+    telefono:  phone,
+    email:     email,
+    sito:      sito,
+    note:      piva ? 'P.IVA: ' + piva : ''
   };
 }
 
