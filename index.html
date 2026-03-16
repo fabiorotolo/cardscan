@@ -500,29 +500,58 @@ function showAdjust(editing) {
 /* ═══════════════════════════════════════
    DETECT SUL FERMO IMMAGINE
 ═══════════════════════════════════════ */
+
+// Calcola la trasformazione object-fit:cover
+// La camera scala il video per coprire il display, quindi c'è un crop
+function getVideoCoverMap() {
+  const dw = $video.clientWidth  || window.innerWidth;
+  const dh = $video.clientHeight || (window.innerHeight - 200);
+  const vw = $capCanvas.width;
+  const vh = $capCanvas.height;
+  // scale = fattore usato da object-fit:cover
+  const scale = Math.max(dw / vw, dh / vh);
+  // quanto video è tagliato su ogni lato (in px video)
+  const cropX = ((vw * scale) - dw) / 2 / scale;
+  const cropY = ((vh * scale) - dh) / 2 / scale;
+  return { scale, cropX, cropY, dw, dh };
+}
+
+// Converte coordinate display → coordinate nel frame video catturato
+function d2v(dx, dy, map) {
+  return { x: map.cropX + dx / map.scale, y: map.cropY + dy / map.scale };
+}
+
 function detectOnFrozen() {
-  const iw = $capCanvas.width, ih = $capCanvas.height;
+  const map = getVideoCoverMap();
+  const { dw, dh } = map;
 
-  // Riquadro guida (stesso della camera): margine 8% orizzontale, h=w/1.75
-  const gw = iw * (1 - 0.08*2);
-  const gh = gw / 1.75;
-  const gx = iw * 0.08;
-  const gy = (ih - gh) / 2;
+  // Guide rectangle in display coords (stesso calcolo di drawGuide)
+  const mh   = dw * 0.08;
+  const gw_d = dw - mh * 2;
+  const gh_d = gw_d / 1.75;
+  const gx_d = mh;
+  const gy_d = (dh - gh_d) / 2;
 
-  // ROI: espandi del 12% per catturare bordi leggermente fuori dal riquadro
-  const EXP = 0.12;
-  const roiX = Math.max(0, Math.round(gx - gw*EXP));
-  const roiY = Math.max(0, Math.round(gy - gh*EXP));
-  const roiW = Math.min(iw - roiX, Math.round(gw*(1 + EXP*2)));
-  const roiH = Math.min(ih - roiY, Math.round(gh*(1 + EXP*2)));
+  // Converti in coordinate video (frame catturato)
+  const tl = d2v(gx_d,        gy_d,        map);
+  const br = d2v(gx_d + gw_d, gy_d + gh_d, map);
 
-  // Limiti entro cui TUTTI i corners devono stare (ROI + 5% tolleranza)
+  // ROI nel frame video con margine 15%
+  const EXP = 0.15;
+  const gw_v = br.x - tl.x;
+  const gh_v = br.y - tl.y;
+  const roiX = Math.max(0, Math.round(tl.x - gw_v * EXP));
+  const roiY = Math.max(0, Math.round(tl.y - gh_v * EXP));
+  const roiW = Math.min($capCanvas.width  - roiX, Math.round(gw_v * (1 + EXP*2)));
+  const roiH = Math.min($capCanvas.height - roiY, Math.round(gh_v * (1 + EXP*2)));
+
+  // Limiti entro cui tutti i corners devono stare (ROI con 5% tolleranza)
   const TOL  = 0.05;
-  const limX0 = roiX - roiW*TOL, limX1 = roiX + roiW*(1+TOL);
-  const limY0 = roiY - roiH*TOL, limY1 = roiY + roiH*(1+TOL);
+  const limX0 = roiX - roiW * TOL, limX1 = roiX + roiW * (1 + TOL);
+  const limY0 = roiY - roiH * TOL, limY1 = roiY + roiH * (1 + TOL);
 
-  const SC = 0.65;
-  const sw = Math.round(roiW*SC), sh = Math.round(roiH*SC);
+  const SC = 0.7;
+  const sw = Math.round(roiW * SC), sh = Math.round(roiH * SC);
 
   let src=null, roi=null, small=null, gray=null, blur=null, eq=null;
   let bestPts=null, bestScore=0;
@@ -535,9 +564,9 @@ function detectOnFrozen() {
     cv.resize(roi, small, new cv.Size(sw, sh));
     cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
     cv.equalizeHist(gray, eq);
-    cv.GaussianBlur(eq, blur, new cv.Size(5,5), 0);
+    cv.GaussianBlur(eq, blur, new cv.Size(5, 5), 0);
 
-    for (const [lo,hi] of [[10,40],[25,80],[50,140],[80,210]]) {
+    for (const [lo, hi] of [[10,40],[25,80],[50,140],[80,210]]) {
       const edges = new cv.Mat();
       cv.Canny(blur, edges, lo, hi);
       const k3 = cv.Mat.ones(3,3,cv.CV_8U);
@@ -549,9 +578,9 @@ function detectOnFrozen() {
       const ctrs = new cv.MatVector(), hier = new cv.Mat();
       cv.findContours(edges, ctrs, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
-      const minA = sw * sh * 0.05; // almeno 5% area ROI
+      const minA = sw * sh * 0.05;
 
-      for (let i=0; i<ctrs.size(); i++) {
+      for (let i = 0; i < ctrs.size(); i++) {
         const cnt  = ctrs.get(i);
         const area = cv.contourArea(cnt);
         if (area < minA || area > sw*sh*0.97) { cnt.delete(); continue; }
@@ -563,31 +592,29 @@ function detectOnFrozen() {
 
         for (const eps of [0.01, 0.015, 0.02, 0.03, 0.05, 0.07]) {
           const ap = new cv.Mat();
-          cv.approxPolyDP(hull, ap, eps*peri, true);
+          cv.approxPolyDP(hull, ap, eps * peri, true);
 
           if (ap.rows === 4) {
-            // Converti in coordinate immagine intera
+            // Riconverti da ROI-scaled → frame video intero
             const pts = [];
-            for (let j=0; j<4; j++) pts.push({
+            for (let j = 0; j < 4; j++) pts.push({
               x: ap.data32S[j*2] / SC + roiX,
               y: ap.data32S[j*2+1] / SC + roiY
             });
 
-            // ── FILTRO CHIAVE: tutti e 4 gli angoli devono stare dentro la ROI ──
+            // ── Tutti e 4 gli angoli DEVONO stare dentro la ROI ──
             const allInside = pts.every(p =>
               p.x >= limX0 && p.x <= limX1 &&
               p.y >= limY0 && p.y <= limY1
             );
             if (!allInside) { ap.delete(); continue; }
 
-            const [tl,tr,br,bl] = orderPts(pts);
-            const w = Math.hypot(tr.x-tl.x, tr.y-tl.y);
-            const h = Math.hypot(bl.x-tl.x, bl.y-tl.y);
+            const [ptl,ptr,pbr,pbl] = orderPts(pts);
+            const w = Math.hypot(ptr.x-ptl.x, ptr.y-ptl.y);
+            const h = Math.hypot(pbl.x-ptl.x, pbl.y-ptl.y);
             const ratio = Math.max(w,h) / (Math.min(w,h) || 1);
-
-            // Score: area * bonus aspect ratio (preferisce rapporti 1.3-2.0)
-            const ratioBonus = (ratio >= 1.3 && ratio <= 2.0) ? 1.4
-                             : (ratio >= 1.1 && ratio <= 2.4) ? 1.0 : 0.4;
+            const ratioBonus = (ratio >= 1.3 && ratio <= 2.1) ? 1.5
+                             : (ratio >= 1.1 && ratio <= 2.5) ? 1.0 : 0.3;
             const score = hArea * ratioBonus;
 
             if (score > bestScore) { bestPts = pts; bestScore = score; }
@@ -600,24 +627,31 @@ function detectOnFrozen() {
       ctrs.delete(); hier.delete(); edges.delete();
       if (bestPts && bestScore > sw*sh*0.2) break;
     }
-  } catch(e) { console.error('CV:',e); }
+  } catch(e) { console.error('CV:', e); }
   finally { [src,roi,small,gray,blur,eq].forEach(m=>{try{if(m)m.delete()}catch(_){}}); }
 
-  const {rw,rh,ox,oy} = getBox();
+  // Converti risultato da coordinate video → coordinate display (adjCanvas)
+  const {rw, rh, ox, oy} = getBox();
+  const iw = $capCanvas.width, ih = $capCanvas.height;
+
   if (bestPts) {
     corners = orderPts(bestPts).map(p => ({
-      x: p.x * (rw/iw) + ox,
-      y: p.y * (rh/ih) + oy
+      x: p.x * (rw / iw) + ox,
+      y: p.y * (rh / ih) + oy
     }));
     setSt($adjSt, 'BORDI RILEVATI — TRASCINA GLI ANGOLI PER AGGIUSTARE', 'ok');
   } else {
-    // Fallback: usa esattamente il riquadro guida
-    corners = [
-      { x: ox + (gx/iw)*rw,        y: oy + (gy/ih)*rh },
-      { x: ox + ((gx+gw)/iw)*rw,   y: oy + (gy/ih)*rh },
-      { x: ox + ((gx+gw)/iw)*rw,   y: oy + ((gy+gh)/ih)*rh },
-      { x: ox + (gx/iw)*rw,        y: oy + ((gy+gh)/ih)*rh }
-    ];
+    // Fallback: posiziona angoli esattamente sul riquadro guida (in display coords)
+    const tl_d = { x: gx_d,        y: gy_d };
+    const tr_d = { x: gx_d + gw_d, y: gy_d };
+    const br_d = { x: gx_d + gw_d, y: gy_d + gh_d };
+    const bl_d = { x: gx_d,        y: gy_d + gh_d };
+    // Converti display → video → adjCanvas
+    const toAdj = p => {
+      const vp = d2v(p.x, p.y, map);
+      return { x: vp.x * (rw/iw) + ox, y: vp.y * (rh/ih) + oy };
+    };
+    corners = [tl_d, tr_d, br_d, bl_d].map(toAdj);
     setSt($adjSt, 'BORDI NON TROVATI — SPOSTA GLI ANGOLI MANUALMENTE', 'warn');
   }
   drawAdj(null);
