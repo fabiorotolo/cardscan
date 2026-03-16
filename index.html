@@ -224,7 +224,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   <div class="panel">
     <div class="st ok">FRONTE + RETRO PRONTI</div>
     <button class="btn" onclick="downloadResult()">💾 SALVA IN PNG</button>
-    <button class="btn" style="border-color:#a78bfa;color:#a78bfa" onclick="analyzeWithAI()">🤖 ANALIZZA CON AI</button>
+    <button class="btn" style="border-color:#a78bfa;color:#a78bfa" onclick="analyzeWithAI()">🔍 LEGGI BIGLIETTO (OCR)</button>
     <button class="btn sec" onclick="resetApp()">🔄 NUOVA SCANSIONE</button>
   </div>
 </div>
@@ -1252,78 +1252,146 @@ async function analyzeWithAI() {
   document.getElementById('aiCardThumb').style.display = 'none';
   document.getElementById('aiSaveBtn').style.display = 'none';
   document.getElementById('aiSt').textContent = '';
+  document.getElementById('aiTag').textContent = 'LETTURA OCR';
   currentContact = null;
 
-  // Mostra miniatura
-  const thumbUrl = $resultCanvas.toDataURL('image/jpeg', 0.7);
+  const thumbUrl = $resultCanvas.toDataURL('image/jpeg', 0.8);
   document.getElementById('aiThumbImg').src = thumbUrl;
 
-  // Prendi solo il fronte (o l'intera immagine se solo fronte)
+  // Usa il fronte per l'OCR
   const imgCanvas = cards.front.cropped || $resultCanvas;
-  const b64 = imgCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/jpeg', data: b64 }
-            },
-            {
-              type: 'text',
-              text: `Analizza questo biglietto da visita ed estrai tutte le informazioni presenti. 
-Rispondi SOLO con un oggetto JSON valido, nessun testo aggiuntivo, nessun markdown.
-Usa esattamente queste chiavi (stringa vuota se non trovato):
-{
-  "nome": "Nome Cognome completo",
-  "azienda": "Nome azienda",
-  "ruolo": "Ruolo o qualifica",
-  "settore": "Settore merceologico dedotto dal biglietto (es: Metalmeccanica, Informatica, Commercio, ecc.)",
-  "indirizzo": "Indirizzo completo",
-  "telefono": "Tutti i numeri di telefono",
-  "email": "Indirizzo email",
-  "sito": "Sito web",
-  "note": "Altre informazioni rilevanti sul biglietto"
-}`
-            }
-          ]
-        }]
-      })
+    // Carica Tesseract.js da CDN se non ancora caricato
+    if (typeof Tesseract === 'undefined') {
+      await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+    }
+
+    document.getElementById('aiLoading').querySelector('div').textContent = 'LETTURA TESTO IN CORSO...';
+
+    // OCR con lingua italiana+inglese
+    const result = await Tesseract.recognize(imgCanvas, 'ita+eng', {
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          const pct = Math.round(m.progress * 100);
+          const el = document.getElementById('aiLoading').querySelector('div');
+          if (el) el.textContent = `LETTURA TESTO... ${pct}%`;
+        }
+      }
     });
 
-    const data = await resp.json();
-    const text = data.content?.[0]?.text || '';
-    const clean = text.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    const rawText = result.data.text;
+    console.log('OCR result:', rawText);
 
-    currentContact = {
-      ...parsed,
-      id: Date.now(),
-      imgFront: cards.front.cropped?.toDataURL('image/jpeg', 0.6) || '',
-      imgResult: $resultCanvas.toDataURL('image/jpeg', 0.6),
-      savedAt: new Date().toLocaleDateString('it-IT')
-    };
+    // Parsing intelligente del testo
+    const contact = parseBusinessCard(rawText);
+    contact.id      = Date.now();
+    contact.imgFront  = imgCanvas.toDataURL('image/jpeg', 0.6);
+    contact.imgResult = $resultCanvas.toDataURL('image/jpeg', 0.6);
+    contact.savedAt   = new Date().toLocaleDateString('it-IT');
+    currentContact = contact;
 
-    // Renderizza i campi editabili
     renderAIFields(currentContact);
-    document.getElementById('aiLoading').style.display = 'none';
-    document.getElementById('aiFields').style.display  = 'flex';
+    document.getElementById('aiLoading').style.display  = 'none';
+    document.getElementById('aiFields').style.display   = 'flex';
     document.getElementById('aiCardThumb').style.display = 'block';
-    document.getElementById('aiSaveBtn').style.display = 'block';
-    setSt(document.getElementById('aiSt'), 'MODIFICA I CAMPI SE NECESSARIO, POI SALVA', 'ok');
+    document.getElementById('aiSaveBtn').style.display  = 'block';
+    setSt(document.getElementById('aiSt'), 'CONTROLLA E MODIFICA I CAMPI, POI SALVA', 'ok');
 
   } catch(e) {
-    console.error('AI error:', e);
+    console.error('OCR error:', e);
     document.getElementById('aiLoading').style.display = 'none';
-    setSt(document.getElementById('aiSt'), 'ERRORE ANALISI — RIPROVA', 'warn');
+    setSt(document.getElementById('aiSt'), 'ERRORE LETTURA — RIPROVA', 'warn');
   }
+}
+
+// Carica uno script esterno dinamicamente
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
+// Parser del testo OCR → campi strutturati
+function parseBusinessCard(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 1);
+  const full  = text;
+
+  // Regex
+  const emailRx   = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
+  const phoneRx   = /(?:\+?\d[\d\s\-().]{6,20}\d)/g;
+  const urlRx     = /(?:https?:\/\/)?(?:www\.)?[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}(?:\/\S*)?/g;
+  const capRx     = /\b\d{5}\b/;
+  const pIvaRx    = /(?:P\.?\s*IVA|C\.?F\.?|VAT)[:\s]*([A-Z0-9]{11,16})/i;
+
+  const emails   = [...(full.match(emailRx)  || [])];
+  const phones   = [...(full.match(phoneRx)  || [])].filter(p => p.replace(/\D/g,'').length >= 7);
+  const urls     = [...(full.match(urlRx)    || [])].filter(u => !emails.some(e => u.includes(e)));
+
+  // Indirizzo: riga con CAP o parole tipo Via/Viale/Corso/Piazza
+  const addrLine = lines.find(l =>
+    capRx.test(l) || /\b(Via|Viale|Corso|Piazza|Str\.|Loc\.|Fraz\.)/i.test(l)
+  ) || '';
+
+  // Azienda: spesso la riga più lunga in maiuscolo nei primi 5 righi
+  const companyLine = lines.slice(0,6).find(l =>
+    l.length > 4 && l === l.toUpperCase() && !/^[\d\s\W]+$/.test(l)
+  ) || '';
+
+  // Nome: riga con due parole in Title Case (non azienda, non indirizzo)
+  const nameLine = lines.find(l => {
+    if (l === companyLine || l === addrLine) return false;
+    const words = l.split(/\s+/);
+    return words.length >= 2 && words.length <= 4 &&
+      words.every(w => w.length > 1 && /^[A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]/.test(w));
+  }) || '';
+
+  // Ruolo: riga con parole tipiche di ruolo
+  const ruoloLine = lines.find(l =>
+    /\b(direttore|director|manager|responsabile|titolare|socio|founder|ceo|cto|sales|commerciale|tecnico|ingegnere|ing\.|arch\.|dott\.|dr\.?|amministratore|presidente|partner|consulente)\b/i.test(l)
+    && l !== nameLine
+  ) || '';
+
+  // Settore dedotto da parole chiave nel testo
+  const settore = guessSector(full);
+
+  // P.IVA / CF
+  const pIvaMatch = full.match(pIvaRx);
+  const piva = pIvaMatch ? pIvaMatch[0] : '';
+
+  return {
+    nome:      nameLine,
+    azienda:   companyLine,
+    ruolo:     ruoloLine,
+    settore:   settore,
+    indirizzo: addrLine,
+    telefono:  phones.join(' / '),
+    email:     emails.join(', '),
+    sito:      urls.filter(u => !emails.some(e => u.includes(e))).join(', '),
+    note:      piva || ''
+  };
+}
+
+function guessSector(text) {
+  const t = text.toLowerCase();
+  const map = [
+    ['metalmeccanica',    ['acciai','acciaio','metall','carpent','telai','chassis','lamier','fonderia','tornit']],
+    ['informatica / IT',  ['software','informatica','digital','cloud','app','web developer','cyber','it srl','tech']],
+    ['edilizia',          ['edil','costruzion','impiant','muratura','ristruttura','architect','geometra']],
+    ['commercio',         ['commerc','vendita','distribuz','import','export','trading']],
+    ['alimentare',        ['aliment','food','ristorante','bar','panificio','macelleria','vinicola','vino']],
+    ['trasporti / logistica',['trasport','logistic','spediz','autotraspor','corriere','fret']],
+    ['consulenza',        ['consulent','studio associato','notaio','avvocato','legale','commercialista']],
+    ['sanità / medicale', ['farmac','medicale','clinic','salute','health','dental','medico','dottore']],
+    ['immobiliare',       ['immobil','agenzia','real estate','affitti','propert']],
+    ['energia',           ['energia','fotovoltaico','rinnovabile','elettric','gas','impianti termici']],
+  ];
+  for (const [sector, kw] of map) {
+    if (kw.some(k => t.includes(k))) return sector;
+  }
+  return '';
 }
 
 function renderAIFields(contact) {
