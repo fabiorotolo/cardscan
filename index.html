@@ -1328,11 +1328,12 @@ function loadScript(src) {
 
 // Parser del testo OCR → campi strutturati (versione robusta)
 function parseBusinessCard(text) {
-  // Normalizza: rimuovi caratteri spazzatura OCR comuni, mantieni struttura righe
+  // Normalizza: rimuovi caratteri spazzatura OCR comuni
   const clean = text
-    .replace(/[|©®™°•·]/g, ' ')   // simboli OCR spurii
-    .replace(/\b[Cc]\.\s*/g, '')    // "C." che OCR legge per icone
-    .replace(/\bwww\b/gi, 'www')    // normalizza
+    .replace(/[|©®™°•·«»""''`\[\]{}]/g, ' ')  // simboli OCR spurii + virgolette strane
+    .replace(/^\s*[!?¡¿]\s*/gm, '')             // ! ? a inizio riga (OCR artefatti)
+    .replace(/\b[a-z]{1}\b/g, ' ')              // lettere singole isolate (rumore OCR)
+    .replace(/\bwww\b/gi, 'www')
     .replace(/[ \t]+/g, ' ');
 
   const lines = clean.split('\n')
@@ -1356,18 +1357,15 @@ function parseBusinessCard(text) {
     if (!phone   && phoneRx.test(l))  { phone   = l.match(phoneRx)[0].trim(); usedLines.add(i); }
     if (!indirizzo && addrRx.test(l)) { indirizzo = l.match(addrRx)[0].trim(); usedLines.add(i); }
     if (!piva    && pivaRx.test(l))   { piva    = l; usedLines.add(i); }
-    // Riga con solo CAP → parte di indirizzo
     if (!indirizzo && capRx.test(l) && l.length < 60) { indirizzo = l; usedLines.add(i); }
   });
 
-  // Aggiungi la riga successiva all'indirizzo se contiene CAP o city
   if (indirizzo) {
     const addrIdx = lines.findIndex(l => l.includes(indirizzo.slice(0,10)));
     if (addrIdx >= 0 && addrIdx+1 < lines.length && !usedLines.has(addrIdx+1)) {
       const next = lines[addrIdx+1];
       if (capRx.test(next) || /\bItaly\b|\bItalia\b/i.test(next)) {
-        indirizzo += ', ' + next;
-        usedLines.add(addrIdx+1);
+        indirizzo += ', ' + next; usedLines.add(addrIdx+1);
       }
     }
   }
@@ -1375,73 +1373,76 @@ function parseBusinessCard(text) {
   // ── 2. Dalle righe rimanenti: trova Nome, Azienda, Ruolo ──
   const remaining = lines.filter((_, i) => !usedLines.has(i));
 
-  // Azienda: riga tutta MAIUSCOLA (3+ lettere, non numero, non indirizzo)
+  const ruoloKeywords = /\b(manager|director|direttore|responsabile|titolare|socio|founder|ceo|cto|coo|presidente|sales|commerciale|tecnico|ingegnere|ing\.|arch\.|dott\.|dr\.?|amministratore|partner|consulente|executive|officer|head|chief|general|regional|area)\b/i;
+
+  // Azienda: riga tutta MAIUSCOLA
   let azienda = '';
   const aziendaIdx = remaining.findIndex(l => {
     const stripped = l.replace(/[^a-zA-Z]/g,'');
-    return stripped.length >= 2
-      && stripped === stripped.toUpperCase()
-      && !phoneRx.test(l) && !emailRx.test(l)
-      && stripped.length <= 30;
+    return stripped.length >= 2 && stripped === stripped.toUpperCase()
+      && !phoneRx.test(l) && !emailRx.test(l) && stripped.length <= 30;
   });
-  if (aziendaIdx >= 0) {
-    azienda = remaining[aziendaIdx].trim();
-    remaining.splice(aziendaIdx, 1);
-  }
+  if (aziendaIdx >= 0) { azienda = remaining[aziendaIdx].trim(); remaining.splice(aziendaIdx, 1); }
 
-  // Ruolo: riga con keyword ruolo OPPURE due parole in Title Case con keyword
-  const ruoloKeywords = /\b(manager|director|direttore|responsabile|titolare|socio|founder|ceo|cto|coo|presidente|sales|commerciale|tecnico|ingegnere|ing\.|arch\.|dott\.|dr\.?|amministratore|partner|consulente|executive|officer|head|chief)\b/i;
+  // Ruolo: pulito da artefatti OCR e dal nome azienda
   let ruolo = '';
-  const ruoloIdx = remaining.findIndex(l => ruoloKeywords.test(l) && l.length < 60);
+  const ruoloIdx = remaining.findIndex(l => ruoloKeywords.test(l) && l.length < 80);
   if (ruoloIdx >= 0) {
-    // Pulisci il ruolo da frammenti OCR (es. "l General Manager Is AF" → "General Manager")
     ruolo = remaining[ruoloIdx]
-      .replace(/\b[A-Z]{1,2}\b/g, '')       // rimuovi lettere singole/doppie isolate
-      .replace(/[^a-zA-ZÀ-ÿ\s\-\/\.]/g,' ')
+      .replace(/[^a-zA-ZÀ-ÿ\s\-\/\.]/g,' ')   // rimuovi simboli non-lettera
+      .replace(/\b[A-Z]{2,}\b/g, '')            // rimuovi sigle tutte maiuscole (es. ISAF, SRL)
+      .replace(/\b[A-Z]{1}\b/g, '')             // rimuovi lettere singole maiuscole
       .replace(/\s{2,}/g,' ').trim();
     remaining.splice(ruoloIdx, 1);
   }
 
-  // Nome: prima riga con 2-4 parole in Title Case rimasta
-  // (esclude righe con solo maiuscole = azienda)
+  // Nome: 2-4 parole in Title Case
   let nome = '';
   const nameIdx = remaining.findIndex(l => {
     const words = l.split(/\s+/).filter(w => w.length > 1);
     return words.length >= 2 && words.length <= 4
       && words.every(w => /^[A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]/.test(w))
-      && !ruoloKeywords.test(l)
-      && l.length < 50;
+      && !ruoloKeywords.test(l) && l.length < 50;
   });
   if (nameIdx >= 0) {
-    nome = remaining[nameIdx].trim();
+    nome = remaining[nameIdx]
+      .replace(/^\d+\s*/,'')          // rimuovi numeri iniziali (es. "4 Gianni" → "Gianni")
+      .replace(/\s+[a-z]$/i,'')       // rimuovi lettera singola finale (es. "Turcatti e")
+      .replace(/^[a-z]\s+/i,'')       // rimuovi lettera singola iniziale
+      .trim();
     remaining.splice(nameIdx, 1);
   }
 
-  // Se non trovato nome ma trovato ruolo sulla stessa riga (es. "Gianni Turcatti General Manager")
+  // Combo "Nome Cognome Ruolo" su una riga
   if (!nome && !ruolo) {
-    const combo = remaining.find(l => l.length > 5 && l.length < 60);
+    const combo = remaining.find(l => l.length > 5 && l.length < 70);
     if (combo) {
       const m = combo.match(/^([A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]+(?:\s+[A-ZÀÈÉÌÒÙÜ][a-zàèéìòùü]+)+)\s+(.+)$/);
-      if (m) { nome = m[1]; ruolo = m[2]; }
+      if (m) { nome = m[1]; ruolo = m[2].replace(/[^a-zA-ZÀ-ÿ\s\-\/\.]/g,' ').trim(); }
     }
   }
 
-  // Azienda fallback: estrai dal dominio email
+  // Azienda fallback dal dominio email (es. @isaf-bus-components.com → "ISAF Bus Components")
   if (!azienda && email) {
-    const dom = email.match(/@([^.@]+)/);
-    if (dom) azienda = dom[1].split('-').map(w => w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
+    const domFull = email.match(/@([^@]+)\./)?.[1] || '';
+    const domMain = email.match(/@([^.@]+)/)?.[1] || '';
+    // Preferisci il nome più corto prima del primo punto come nome azienda
+    azienda = (domFull || domMain)
+      .split('-').map(w => w.charAt(0).toUpperCase()+w.slice(1)).join(' ');
+  }
+
+  // Estrai solo il numero P.IVA
+  let pivaNum = '';
+  if (piva) {
+    const m = piva.match(/\d{11,16}/);
+    pivaNum = m ? m[0] : piva.replace(/P\.?\s*[Ii]va[:\s]*/gi,'').trim();
   }
 
   return {
-    nome:      nome,
-    azienda:   azienda,
-    ruolo:     ruolo,
+    nome, azienda, ruolo,
     settore:   guessSector(text),
-    indirizzo: indirizzo,
-    telefono:  phone,
-    email:     email,
-    sito:      sito,
-    note:      piva ? 'P.IVA: ' + piva : ''
+    indirizzo, telefono: phone, email, sito,
+    note: pivaNum ? 'P.IVA: ' + pivaNum : ''
   };
 }
 
@@ -1449,6 +1450,7 @@ function guessSector(text) {
   const t = text.toLowerCase();
   const map = [
     ['metalmeccanica',    ['acciai','acciaio','metall','carpent','telai','chassis','lamier','fonderia','tornit']],
+    ['automotive / bus',  ['bus','autobus','coach','pullman','bus-components','veicoli','automotive','mezzi']],
     ['informatica / IT',  ['software','informatica','digital','cloud','app','web developer','cyber','it srl','tech']],
     ['edilizia',          ['edil','costruzion','impiant','muratura','ristruttura','architect','geometra']],
     ['commercio',         ['commerc','vendita','distribuz','import','export','trading']],
@@ -1487,28 +1489,21 @@ async function manualEnrich() {
 }
 
 async function enrichContact(contact) {
-  // Prova a estrarre azienda dal dominio email se manca
-  if (!contact.azienda && contact.email) {
-    const domainMatch = contact.email.match(/@([^.]+)/);
-    if (domainMatch) {
-      // es. gturcatti@isaf-bus-components.com → "ISAF Bus Components"
-      const domainName = domainMatch[1]
-        .split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-      contact.azienda = domainName;
-    }
+  // Estrai sito dal dominio email se non trovato
+  if (!contact.sito && contact.email) {
+    const domain = contact.email.split('@')[1];
+    if (domain) contact.sito = domain;
   }
 
-  // Pulisci il ruolo da caratteri OCR spazzatura
-  if (contact.ruolo) {
-    contact.ruolo = contact.ruolo
-      .replace(/[^a-zA-ZÀ-ÿ0-9\s\-\/\.]/g, ' ')
-      .replace(/\s{2,}/g, ' ').trim();
-  }
-
-  // Query per la ricerca: azienda + nome se disponibili
+  // Usa il dominio email anche per la query se azienda non c'è
   const queryParts = [contact.azienda, contact.nome].filter(Boolean);
-  if (!queryParts.length && contact.email) queryParts.push(contact.email.split('@')[1]);
+  if (!queryParts.length && contact.email) queryParts.push(contact.email.split('@')[1]?.split('.')[0]);
   const query = queryParts.join(' ').trim();
+
+  // Deduce settore anche dal dominio email
+  if (!contact.settore && contact.email) {
+    contact.settore = guessSector(contact.email + ' ' + (contact.sito||''));
+  }
   if (!query) return;
 
   console.log('Enriching with query:', query);
