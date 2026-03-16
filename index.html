@@ -2,7 +2,10 @@
 <html lang="it">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#08090d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>CardScan</title>
 <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="cvScriptLoaded()"></script>
 <style>
@@ -28,12 +31,14 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 .lbl{font-size:11px;color:var(--dim);letter-spacing:3px;text-align:center;padding:0 20px}
 
 /* SCREENS */
-.screen{display:flex;flex-direction:column;height:100vh;height:100dvh}
+.screen{display:flex;flex-direction:column;height:100vh;height:100svh}
 .screen.hide{display:none!important}
 
 /* HEADER */
 .hdr{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;
-  padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surf)}
+  padding:14px 18px;
+  padding-top:calc(14px + env(safe-area-inset-top, 0px));
+  border-bottom:1px solid var(--border);background:var(--surf)}
 .hdr-logo{font-size:16px;letter-spacing:6px;color:var(--accent)}
 .tag{font-size:11px;letter-spacing:2px;color:var(--dim);padding:4px 10px;border:1px solid var(--border)}
 .tag.ok{color:var(--accent);border-color:var(--accent)}
@@ -56,21 +61,22 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 
 /* PANEL */
 .panel{flex-shrink:0;background:var(--surf);border-top:1px solid var(--border);
-  padding:14px 18px;padding-bottom:max(18px,env(safe-area-inset-bottom))}
-.thumbs{display:flex;gap:12px;margin-bottom:12px}
+  padding:12px 18px 12px;
+  padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))}
+.thumbs{display:flex;gap:12px;margin-bottom:10px}
 .tw{flex:1}
-.tb{height:52px;background:var(--bg);border:1px solid var(--border);
+.tb{height:46px;background:var(--bg);border:1px solid var(--border);
   overflow:hidden;display:flex;align-items:center;justify-content:center;transition:border-color .3s}
 .tb.done{border-color:var(--accent)}
 .tb img{width:100%;height:100%;object-fit:cover}
 .ph{font-size:10px;letter-spacing:2px;color:var(--dim)}
-.tlbl{font-size:10px;letter-spacing:2px;color:var(--dim);text-align:center;margin-top:4px}
+.tlbl{font-size:10px;letter-spacing:2px;color:var(--dim);text-align:center;margin-top:3px}
 .st{font-size:11px;letter-spacing:1px;color:var(--dim);text-align:center;
-  min-height:16px;margin-bottom:12px}
+  min-height:15px;margin-bottom:10px}
 .st.ok{color:var(--accent)} .st.warn{color:var(--warn)}
 
 /* BUTTONS */
-.btn{display:block;width:100%;padding:15px 20px;background:transparent;
+.btn{display:block;width:100%;padding:13px 20px;background:transparent;
   border:1px solid var(--accent);color:var(--accent);font-family:var(--font);
   font-size:12px;letter-spacing:3px;cursor:pointer;
   -webkit-tap-highlight-color:transparent;margin-bottom:8px;
@@ -83,7 +89,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 .btn.warn:active{background:var(--warn);color:var(--bg)}
 .btn-row{display:flex;gap:8px;margin-bottom:8px}
 .btn-row .btn{margin-bottom:0}
-.btn-row .btn.icon{flex:0 0 auto;width:auto;padding:15px 18px}
+.btn-row .btn.icon{flex:0 0 auto;width:auto;padding:13px 18px}
 
 /* RESULT */
 .res-area{flex:1;overflow:auto;display:flex;align-items:center;
