@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>CardScan — Biglietti da Visita</title>
+  <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="cvScriptLoaded()"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #08090d;
+      --surface: #0f1018;
+      --surface2: #161820;
+      --border: #252635;
+      --accent: #3df5c1;
+      --accent-dim: rgba(61,245,193,0.15);
+      --warn: #f5a53d;
+      --warn-dim: rgba(245,165,61,0.12);
+      --text: #dde0f0;
+      --text-dim: #585a70;
+      --success: #3df5c1;
+      --font: 'Courier New', 'Lucida Console', monospace;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── LOADING ── */
+    #loading {
+      position: fixed; inset: 0; z-index: 200;
+      background: var(--bg);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 24px;
+    }
+    #loading.hide { display: none; }
+
+    .logo {
+      font-size: 22px; font-weight: 700;
+      letter-spacing: 8px; color: var(--accent);
+    }
+    .logo span { color: var(--text-dim); }
+
+    .spinner {
+      width: 36px; height: 36px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .load-label {
+      font-size: 11px; color: var(--text-dim);
+      letter-spacing: 3px;
+    }
+
+    /* ── SCAN SCREEN ── */
+    #scanScreen {
+      display: flex; flex-direction: column; height: 100vh;
+    }
+    #scanScreen.hide { display: none; }
+
+    /* header */
+    .hdr {
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .hdr-logo { font-size: 16px; letter-spacing: 6px; color: var(--accent); }
+    .hdr-step {
+      font-size: 11px; letter-spacing: 2px; color: var(--text-dim);
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+    }
+
+    /* camera area */
+    .cam-wrap {
+      position: relative; flex: 1; overflow: hidden;
+      background: #000;
+    }
+    #video {
+      width: 100%; height: 100%;
+      object-fit: cover; display: block;
+    }
+    #overlay {
+      position: absolute; inset: 0;
+      pointer-events: none;
+    }
+    .badge {
+      position: absolute; top: 16px; left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px; letter-spacing: 3px;
+      padding: 5px 14px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      opacity: 0; transition: opacity .3s;
+    }
+    .badge.show { opacity: 1; }
+
+    /* viewfinder guide */
+    .guide {
+      position: absolute; inset: 10%;
+      border: 1px dashed rgba(255,255,255,0.12);
+      pointer-events: none;
+    }
+    .guide::before, .guide::after,
+    .guide-inner::before, .guide-inner::after {
+      content: ''; position: absolute;
+      width: 20px; height: 20px;
+      border-color: rgba(255,255,255,0.25);
+      border-style: solid;
+    }
+    .guide::before { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
+    .guide::after  { top: -1px; right: -1px; border-width: 2px 2px 0 0; }
+    .guide-inner::before { bottom: -1px; left: -1px; border-width: 0 0 2px 2px; }
+    .guide-inner::after  { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
+
+    /* bottom panel */
+    .panel {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 16px 18px 20px;
+    }
+
+    /* thumbnails */
+    .thumbs {
+      display: flex; gap: 12px; margin-bottom: 14px;
+    }
+    .thumb-wrap { flex: 1; }
+    .thumb-box {
+      height: 52px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color .3s;
+    }
+    .thumb-box.done { border-color: var(--accent); }
+    .thumb-box img { width: 100%; height: 100%; object-fit: cover; }
+    .thumb-box .placeholder {
+      font-size: 10px; letter-spacing: 2px; color: var(--text-dim);
+    }
+    .thumb-lbl {
+      font-size: 10px; letter-spacing: 2px; color: var(--text-dim);
+      text-align: center; margin-top: 5px;
+    }
+
+    /* status */
+    .status {
+      font-size: 12px; letter-spacing: 1px; color: var(--text-dim);
+      text-align: center; min-height: 18px; margin-bottom: 14px;
+      transition: color .3s;
+    }
+    .status.detected { color: var(--accent); }
+    .status.warn     { color: var(--warn); }
+
+    /* button */
+    .btn {
+      display: block; width: 100%;
+      padding: 15px 20px;
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-family: var(--font);
+      font-size: 13px; letter-spacing: 4px;
+      cursor: pointer;
+      transition: background .2s, color .2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:not(:disabled):active,
+    .btn:not(:disabled):hover {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    .btn:disabled {
+      opacity: 0.3;
+      cursor: default;
+      border-color: var(--text-dim);
+      color: var(--text-dim);
+    }
+    .btn.sec {
+      border-color: var(--text-dim);
+      color: var(--text-dim);
+      margin-top: 10px;
+    }
+    .btn.sec:not(:disabled):active,
+    .btn.sec:not(:disabled):hover {
+      background: var(--text-dim);
+      color: var(--bg);
+    }
+
+    /* ── RESULT SCREEN ── */
+    #resultScreen {
+      display: flex; flex-direction: column; height: 100vh;
+    }
+    #resultScreen.hide { display: none; }
+
+    .result-area {
+      flex: 1; overflow: auto;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--surface2);
+      padding: 20px;
+    }
+    #resultCanvas {
+      max-width: 100%; max-height: 100%;
+      border: 1px solid var(--border);
+      display: block;
+    }
+
+    /* ── hidden utils ── */
+    #procCanvas, #capCanvas { display: none; }
+
+    /* safe area for notch phones */
+    .panel { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════ LOADING ═══════════════════════════ -->
+<div id="loading">
+  <div class="logo">CARD<span>SCAN</span></div>
+  <div class="spinner"></div>
+  <div class="load-label">CARICAMENTO OPENCV.JS...</div>
+</div>
+
+<!-- ═══════════════════════════ SCAN ═══════════════════════════ -->
+<div id="scanScreen" class="hide">
+  <div class="hdr">
+    <div class="hdr-logo">CARDSCAN</div>
+    <div class="hdr-step" id="stepLabel">PASSO 1 / 2</div>
+  </div>
+
+  <div class="cam-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+    <div class="guide"><div class="guide-inner"></div></div>
+    <div class="badge" id="badge">BIGLIETTO RILEVATO</div>
+  </div>
+
+  <div class="panel">
+    <div class="thumbs">
+      <div class="thumb-wrap">
+        <div class="thumb-box" id="thumbFront">
+          <span class="placeholder">FRONTE</span>
+        </div>
+        <div class="thumb-lbl">FRONTE</div>
+      </div>
+      <div class="thumb-wrap">
+        <div class="thumb-box" id="thumbBack">
+          <span class="placeholder">RETRO</span>
+        </div>
+        <div class="thumb-lbl">RETRO</div>
+      </div>
+    </div>
+
+    <div class="status" id="status">INQUADRA IL BIGLIETTO DA VISITA</div>
+    <button class="btn" id="captureBtn" disabled onclick="onCapture()">SCATTA FRONTE</button>
+    <button class="btn sec" id="manualBtn" onclick="onManualCapture()">SCATTA SENZA RILEVAMENTO</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ RESULT ═══════════════════════════ -->
+<div id="resultScreen" class="hide">
+  <div class="hdr">
+    <div class="hdr-logo">CARDSCAN</div>
+    <div class="hdr-step" style="color:var(--accent);border-color:var(--accent)">COMPLETATO ✓</div>
+  </div>
+  <div class="result-area">
+    <canvas id="resultCanvas"></canvas>
+  </div>
+  <div class="panel">
+    <div class="status detected">SCANSIONE COMPLETATA — FRONTE + RETRO</div>
+    <button class="btn" onclick="downloadResult()">SALVA IN PNG</button>
+    <button class="btn sec" onclick="resetApp()">NUOVA SCANSIONE</button>
+  </div>
+</div>
+
+<!-- hidden canvases -->
+<canvas id="procCanvas"></canvas>
+<canvas id="capCanvas"></canvas>
+
+<script>
+'use strict';
+
+// ━━━━━━━━━━━━━━━━━━ STATE ━━━━━━━━━━━━━━━━━━
+let cvReady     = false;
+let stream      = null;
+let rafId       = null;
+let step        = 'front';   // 'front' | 'back'
+let frontCanvas = null;
+let backCanvas  = null;
+let detectedPts = null;
+let stableCount = 0;
+const STABLE_THRESHOLD = 8;
+
+// DOM refs
+const $loading    = document.getElementById('loading');
+const $scanScreen = document.getElementById('scanScreen');
+const $resultScreen = document.getElementById('resultScreen');
+const $video      = document.getElementById('video');
+const $overlay    = document.getElementById('overlay');
+const $badge      = document.getElementById('badge');
+const $status     = document.getElementById('status');
+const $captureBtn = document.getElementById('captureBtn');
+const $stepLabel  = document.getElementById('stepLabel');
+const $procCanvas = document.getElementById('procCanvas');
+const $capCanvas  = document.getElementById('capCanvas');
+const ovCtx       = $overlay.getContext('2d');
+
+// ━━━━━━━━━━━━━━━━━━ OPENCV INIT ━━━━━━━━━━━━━━━━━━
+function cvScriptLoaded() {
+  // cv may need runtime initialization
+  if (typeof cv === 'undefined') {
+    setTimeout(cvScriptLoaded, 300);
+    return;
+  }
+  if (cv.getBuildInformation) {
+    onCvReady();
+  } else {
+    cv.onRuntimeInitialized = onCvReady;
+  }
+}
+
+function onCvReady() {
+  cvReady = true;
+  $loading.classList.add('hide');
+  $scanScreen.classList.remove('hide');
+  startCamera();
+}
+
+// Fallback polling
+let cvPollAttempts = 0;
+function pollCv() {
+  if (cvReady) return;
+  cvPollAttempts++;
+  if (typeof cv !== 'undefined' && cv.getBuildInformation) {
+    onCvReady();
+  } else if (cvPollAttempts < 40) {
+    setTimeout(pollCv, 500);
+  } else {
+    document.querySelector('.load-label').textContent = 'ERRORE CARICAMENTO — RICARICA LA PAGINA';
+  }
+}
+setTimeout(pollCv, 2000);
+
+// ━━━━━━━━━━━━━━━━━━ CAMERA ━━━━━━━━━━━━━━━━━━
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    });
+    $video.srcObject = stream;
+    $video.onloadedmetadata = () => {
+      $video.play();
+      startLoop();
+    };
+  } catch (err) {
+    setStatus('ERRORE FOTOCAMERA: ' + err.message, 'warn');
+  }
+}
+
+function stopCamera() {
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+// ━━━━━━━━━━━━━━━━━━ PROCESSING LOOP ━━━━━━━━━━━━━━━━━━
+function startLoop() {
+  function tick() {
+    if ($video.readyState >= 2 && cvReady) processFrame();
+    rafId = requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function processFrame() {
+  const vw = $video.videoWidth;
+  const vh = $video.videoHeight;
+  if (!vw || !vh) return;
+
+  // Draw video to processing canvas
+  $procCanvas.width  = vw;
+  $procCanvas.height = vh;
+  $procCanvas.getContext('2d').drawImage($video, 0, 0);
+
+  // Resize overlay to display size
+  const dw = $video.clientWidth;
+  const dh = $video.clientHeight;
+  $overlay.width  = dw;
+  $overlay.height = dh;
+  ovCtx.clearRect(0, 0, dw, dh);
+
+  // OpenCV
+  let src = null, gray = null, blur = null, edges = null,
+      kernel = null, contours = null, hier = null;
+  try {
+    src      = cv.imread($procCanvas);
+    gray     = new cv.Mat();
+    blur     = new cv.Mat();
+    edges    = new cv.Mat();
+    contours = new cv.MatVector();
+    hier     = new cv.Mat();
+
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 50, 180);
+
+    kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+    cv.dilate(edges, edges, kernel);
+
+    cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    const minArea = vw * vh * 0.04;
+    let bestPts = null, bestArea = 0;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt  = contours.get(i);
+      const area = cv.contourArea(cnt);
+      if (area < minArea) { cnt.delete(); continue; }
+
+      const peri  = cv.arcLength(cnt, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+
+      if (approx.rows === 4 && cv.isContourConvex(approx) && area > bestArea) {
+        const pts = [];
+        for (let j = 0; j < 4; j++) {
+          pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+        }
+        bestPts  = pts;
+        bestArea = area;
+      }
+      approx.delete();
+      cnt.delete();
+    }
+
+    if (bestPts) {
+      detectedPts = bestPts;
+      stableCount = Math.min(stableCount + 1, STABLE_THRESHOLD + 5);
+
+      const sx = dw / vw, sy = dh / vh;
+      const disp = bestPts.map(p => ({ x: p.x * sx, y: p.y * sy }));
+      const stable = stableCount >= STABLE_THRESHOLD;
+
+      drawOverlay(disp, stable);
+      $badge.classList.add('show');
+
+      if (stable) {
+        $captureBtn.disabled = false;
+        setStatus(step === 'front' ? 'FRONTE PRONTO — PREMI SCATTA' : 'RETRO PRONTO — PREMI SCATTA', 'detected');
+      } else {
+        setStatus('ALLINEA IL BIGLIETTO...', '');
+      }
+    } else {
+      detectedPts = null;
+      stableCount = Math.max(stableCount - 2, 0);
+      if (stableCount === 0) {
+        $captureBtn.disabled = true;
+        $badge.classList.remove('show');
+        setStatus(step === 'front' ? 'INQUADRA IL FRONTE DEL BIGLIETTO' : 'GIRA IL BIGLIETTO — INQUADRA IL RETRO', '');
+      }
+    }
+
+  } catch (e) {
+    console.error('CV error:', e);
+  } finally {
+    [src, gray, blur, edges, kernel, contours, hier].forEach(m => { try { if (m) m.delete(); } catch(_){} });
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━ OVERLAY DRAWING ━━━━━━━━━━━━━━━━━━
+function drawOverlay(pts, stable) {
+  const col  = stable ? '#3df5c1' : '#f5a53d';
+  const rgba = stable ? 'rgba(61,245,193,0.12)' : 'rgba(245,165,61,0.10)';
+
+  // Fill
+  ovCtx.beginPath();
+  ovCtx.moveTo(pts[0].x, pts[0].y);
+  pts.slice(1).forEach(p => ovCtx.lineTo(p.x, p.y));
+  ovCtx.closePath();
+  ovCtx.fillStyle = rgba;
+  ovCtx.fill();
+
+  // Stroke
+  ovCtx.beginPath();
+  ovCtx.moveTo(pts[0].x, pts[0].y);
+  pts.slice(1).forEach(p => ovCtx.lineTo(p.x, p.y));
+  ovCtx.closePath();
+  ovCtx.strokeStyle = col;
+  ovCtx.lineWidth = 2;
+  ovCtx.stroke();
+
+  // Corner brackets + dots
+  pts.forEach((p, i) => {
+    const next = pts[(i + 1) % 4];
+    const prev = pts[(i + 3) % 4];
+    const L = 22;
+    const dn = norm(next.x - p.x, next.y - p.y);
+    const dp = norm(prev.x - p.x, prev.y - p.y);
+
+    ovCtx.beginPath();
+    ovCtx.moveTo(p.x + dn.x * L, p.y + dn.y * L);
+    ovCtx.lineTo(p.x, p.y);
+    ovCtx.lineTo(p.x + dp.x * L, p.y + dp.y * L);
+    ovCtx.strokeStyle = col;
+    ovCtx.lineWidth = 3;
+    ovCtx.stroke();
+
+    ovCtx.beginPath();
+    ovCtx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    ovCtx.fillStyle = col;
+    ovCtx.fill();
+  });
+}
+
+function norm(x, y) {
+  const d = Math.sqrt(x * x + y * y) || 1;
+  return { x: x / d, y: y / d };
+}
+
+// ━━━━━━━━━━━━━━━━━━ CAPTURE ━━━━━━━━━━━━━━━━━━
+function onCapture() {
+  if (!detectedPts) return;
+  const vw = $video.videoWidth, vh = $video.videoHeight;
+  $capCanvas.width  = vw;
+  $capCanvas.height = vh;
+  $capCanvas.getContext('2d').drawImage($video, 0, 0);
+  const warped = perspectiveWarp($capCanvas, detectedPts);
+  storeCapture(warped);
+}
+
+function onManualCapture() {
+  // capture full frame without perspective correction
+  const vw = $video.videoWidth, vh = $video.videoHeight;
+  $capCanvas.width  = vw;
+  $capCanvas.height = vh;
+  $capCanvas.getContext('2d').drawImage($video, 0, 0);
+
+  if (detectedPts) {
+    const warped = perspectiveWarp($capCanvas, detectedPts);
+    storeCapture(warped);
+  } else {
+    // No contour: just store the full frame
+    const c = document.createElement('canvas');
+    c.width  = vw;
+    c.height = vh;
+    c.getContext('2d').drawImage($capCanvas, 0, 0);
+    storeCapture(c);
+  }
+}
+
+function storeCapture(canvas) {
+  if (step === 'front') {
+    frontCanvas = canvas;
+    updateThumb('thumbFront', canvas);
+
+    step = 'back';
+    $stepLabel.textContent = 'PASSO 2 / 2';
+    $captureBtn.textContent = 'SCATTA RETRO';
+    $captureBtn.disabled = true;
+    stableCount = 0;
+    detectedPts = null;
+    $badge.classList.remove('show');
+    setStatus('ORA GIRA IL BIGLIETTO E INQUADRA IL RETRO', 'warn');
+
+  } else {
+    backCanvas = canvas;
+    updateThumb('thumbBack', canvas);
+    stopCamera();
+    buildResult();
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━ PERSPECTIVE WARP ━━━━━━━━━━━━━━━━━━
+function orderPts(pts) {
+  const tl = pts.reduce((a, b) => (a.x + a.y < b.x + b.y ? a : b));
+  const br = pts.reduce((a, b) => (a.x + a.y > b.x + b.y ? a : b));
+  const tr = pts.reduce((a, b) => (a.x - a.y > b.x - b.y ? a : b));
+  const bl = pts.reduce((a, b) => (a.x - a.y < b.x - b.y ? a : b));
+  return [tl, tr, br, bl];
+}
+
+function perspectiveWarp(srcCanvas, rawPts) {
+  const [tl, tr, br, bl] = orderPts(rawPts);
+
+  const maxW = Math.round(Math.max(
+    Math.hypot(tr.x - tl.x, tr.y - tl.y),
+    Math.hypot(br.x - bl.x, br.y - bl.y)
+  ));
+  const maxH = Math.round(Math.max(
+    Math.hypot(bl.x - tl.x, bl.y - tl.y),
+    Math.hypot(br.x - tr.x, br.y - tr.y)
+  ));
+
+  const out = document.createElement('canvas');
+  out.width  = maxW;
+  out.height = maxH;
+
+  let src = null, dst = null, srcM = null, dstM = null, M = null;
+  try {
+    src  = cv.imread(srcCanvas);
+    dst  = new cv.Mat();
+    srcM = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x,tl.y, tr.x,tr.y, br.x,br.y, bl.x,bl.y]);
+    dstM = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, maxW,0, maxW,maxH, 0,maxH]);
+    M    = cv.getPerspectiveTransform(srcM, dstM);
+    cv.warpPerspective(src, dst, M, new cv.Size(maxW, maxH),
+                       cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+    cv.imshow(out, dst);
+  } catch (e) {
+    console.error('Warp error:', e);
+    out.getContext('2d').drawImage(srcCanvas, 0, 0);
+  } finally {
+    [src, dst, srcM, dstM, M].forEach(m => { try { if(m) m.delete(); } catch(_){} });
+  }
+  return out;
+}
+
+// ━━━━━━━━━━━━━━━━━━ RESULT ━━━━━━━━━━━━━━━━━━
+function buildResult() {
+  $scanScreen.classList.add('hide');
+  $resultScreen.classList.remove('hide');
+
+  const PAD  = 28;
+  const GAP  = 16;
+  const LBLH = 32;
+
+  // Normalizza altezze
+  const H    = Math.max(frontCanvas.height, backCanvas.height);
+  const fw   = Math.round(frontCanvas.width  * H / frontCanvas.height);
+  const bw   = Math.round(backCanvas.width   * H / backCanvas.height);
+
+  const totalW = PAD * 2 + fw + GAP + bw;
+  const totalH = PAD * 2 + H  + LBLH;
+
+  const rc  = document.getElementById('resultCanvas');
+  rc.width  = totalW;
+  rc.height = totalH;
+  const ctx = rc.getContext('2d');
+
+  // BG
+  ctx.fillStyle = '#0a0b10';
+  ctx.fillRect(0, 0, totalW, totalH);
+
+  // Biglietti
+  ctx.drawImage(frontCanvas, PAD, PAD, fw, H);
+  ctx.drawImage(backCanvas,  PAD + fw + GAP, PAD, bw, H);
+
+  // Bordi
+  ctx.strokeStyle = '#252635';
+  ctx.lineWidth   = 1;
+  ctx.strokeRect(PAD, PAD, fw, H);
+  ctx.strokeRect(PAD + fw + GAP, PAD, bw, H);
+
+  // Etichette
+  ctx.fillStyle  = '#585a70';
+  ctx.font       = '11px "Courier New"';
+  ctx.textAlign  = 'center';
+  ctx.fillText('FRONTE', PAD + fw / 2,            PAD + H + 20);
+  ctx.fillText('RETRO',  PAD + fw + GAP + bw / 2, PAD + H + 20);
+}
+
+// ━━━━━━━━━━━━━━━━━━ DOWNLOAD ━━━━━━━━━━━━━━━━━━
+function downloadResult() {
+  const rc = document.getElementById('resultCanvas');
+  const now = new Date();
+  const ts  = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '_',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0')
+  ].join('');
+  const a  = document.createElement('a');
+  a.download = `biglietto_${ts}.png`;
+  a.href     = rc.toDataURL('image/png');
+  a.click();
+}
+
+// ━━━━━━━━━━━━━━━━━━ RESET ━━━━━━━━━━━━━━━━━━
+function resetApp() {
+  frontCanvas = null;
+  backCanvas  = null;
+  step        = 'front';
+  detectedPts = null;
+  stableCount = 0;
+
+  $stepLabel.textContent  = 'PASSO 1 / 2';
+  $captureBtn.textContent = 'SCATTA FRONTE';
+  $captureBtn.disabled    = true;
+
+  resetThumb('thumbFront', 'FRONTE');
+  resetThumb('thumbBack', 'RETRO');
+  $badge.classList.remove('show');
+  setStatus('INQUADRA IL BIGLIETTO DA VISITA', '');
+
+  $resultScreen.classList.add('hide');
+  $scanScreen.classList.remove('hide');
+  startCamera();
+}
+
+// ━━━━━━━━━━━━━━━━━━ HELPERS ━━━━━━━━━━━━━━━━━━
+function setStatus(msg, type) {
+  $status.textContent  = msg;
+  $status.className    = 'status' + (type ? ' ' + type : '');
+}
+
+function updateThumb(id, canvas) {
+  const el  = document.getElementById(id);
+  const img = new Image();
+  img.src   = canvas.toDataURL('image/jpeg', 0.8);
+  el.innerHTML = '';
+  el.appendChild(img);
+  el.classList.add('done');
+}
+
+function resetThumb(id, label) {
+  const el       = document.getElementById(id);
+  el.innerHTML   = `<span class="placeholder">${label}</span>`;
+  el.classList.remove('done');
+}
+</script>
+</body>
+</html>
