@@ -251,6 +251,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   <div class="panel">
     <div class="st" id="aiSt"></div>
     <button class="btn" id="aiSaveBtn" style="display:none;border-color:#a78bfa;color:#a78bfa" onclick="saveContact()">💾 SALVA IN ARCHIVIO</button>
+    <button class="btn" id="aiSearchBtn" style="display:none;border-color:#3df5c1;color:#3df5c1" onclick="manualEnrich()">🔍 CERCA SU WEB</button>
     <button class="btn sec" onclick="showScreen('scrResult')">← TORNA AL BIGLIETTO</button>
   </div>
 </div>
@@ -1267,6 +1268,7 @@ async function analyzeWithAI() {
     document.getElementById('aiFields').style.display    = 'flex';
     document.getElementById('aiCardThumb').style.display = 'block';
     document.getElementById('aiSaveBtn').style.display   = 'block';
+    document.getElementById('aiSearchBtn').style.display = 'block';
     setSt(document.getElementById('aiSt'), msg, type);
   };
 
@@ -1405,74 +1407,117 @@ function guessSector(text) {
 }
 
 /* ═══════════════════════════════════════
-   WEB ENRICHMENT (DuckDuckGo + Wikipedia)
+   WEB ENRICHMENT
 ═══════════════════════════════════════ */
+async function manualEnrich() {
+  // Leggi i valori attuali dai campi
+  document.querySelectorAll('#aiFields input[data-key]').forEach(inp => {
+    if (currentContact) currentContact[inp.dataset.key] = inp.value;
+  });
+  const btn = document.getElementById('aiSearchBtn');
+  btn.textContent = '⏳ RICERCA IN CORSO...';
+  btn.disabled = true;
+  setSt(document.getElementById('aiSt'), 'RICERCA IN CORSO...', '');
+
+  await enrichContact(currentContact);
+  renderAIFields(currentContact);
+
+  btn.textContent = '🔍 CERCA SU WEB';
+  btn.disabled = false;
+  setSt(document.getElementById('aiSt'), 'RICERCA COMPLETATA — CONTROLLA I CAMPI', 'ok');
+}
+
 async function enrichContact(contact) {
-  const query = [contact.azienda, contact.nome].filter(Boolean).join(' ').trim();
+  // Prova a estrarre azienda dal dominio email se manca
+  if (!contact.azienda && contact.email) {
+    const domainMatch = contact.email.match(/@([^.]+)/);
+    if (domainMatch) {
+      // es. gturcatti@isaf-bus-components.com → "ISAF Bus Components"
+      const domainName = domainMatch[1]
+        .split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      contact.azienda = domainName;
+    }
+  }
+
+  // Pulisci il ruolo da caratteri OCR spazzatura
+  if (contact.ruolo) {
+    contact.ruolo = contact.ruolo
+      .replace(/[^a-zA-ZÀ-ÿ0-9\s\-\/\.]/g, ' ')
+      .replace(/\s{2,}/g, ' ').trim();
+  }
+
+  // Query per la ricerca: azienda + nome se disponibili
+  const queryParts = [contact.azienda, contact.nome].filter(Boolean);
+  if (!queryParts.length && contact.email) queryParts.push(contact.email.split('@')[1]);
+  const query = queryParts.join(' ').trim();
   if (!query) return;
 
-  try {
-    // ── 1. DuckDuckGo Instant Answer API ──
-    const ddUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
-    const ddResp = await fetch(ddUrl);
-    const dd = await ddResp.json();
+  console.log('Enriching with query:', query);
 
-    // Abstract (descrizione azienda)
-    if (dd.AbstractText && dd.AbstractText.length > 20) {
-      if (!contact.note) contact.note = dd.AbstractText.slice(0, 300);
-    }
-    // Tipo entità (es. "company", "person")
-    if (dd.Type === 'A' && dd.AbstractText) {
-      // Prova a dedurre settore dal testo DuckDuckGo
-      if (!contact.settore) contact.settore = guessSector(dd.AbstractText);
-    }
-    // Sito web dal risultato DuckDuckGo
-    if (!contact.sito && dd.AbstractURL) {
-      contact.sito = dd.AbstractURL.replace(/^https?:\/\//, '');
-    }
-    // Indirizzo dal risultato Infobox
-    if (dd.Infobox && dd.Infobox.content) {
+  // ── 1. DuckDuckGo Instant Answer ──
+  try {
+    const ddUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
+    const dd = await (await fetch(ddUrl)).json();
+
+    if (dd.AbstractText?.length > 20 && !contact.note)
+      contact.note = dd.AbstractText.slice(0, 300);
+    if (!contact.sito && dd.AbstractURL)
+      contact.sito = dd.AbstractURL.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (!contact.settore && dd.AbstractText)
+      contact.settore = guessSector(dd.AbstractText);
+    if (dd.Infobox?.content) {
       for (const item of dd.Infobox.content) {
-        if (/address|sede|headquarters/i.test(item.label) && !contact.indirizzo) {
+        if (/address|sede|headquarters/i.test(item.label) && !contact.indirizzo)
           contact.indirizzo = item.value;
-        }
-        if (/phone|telefono/i.test(item.label) && !contact.telefono) {
+        if (/phone|telefono/i.test(item.label) && !contact.telefono)
           contact.telefono = item.value;
-        }
-        if (/industry|settore|sector/i.test(item.label) && !contact.settore) {
+        if (/industry|settore|sector/i.test(item.label) && !contact.settore)
           contact.settore = item.value;
-        }
       }
     }
-  } catch(e) { console.log('DuckDuckGo enrich failed:', e.message); }
+  } catch(e) { console.log('DDG failed:', e.message); }
 
-  // ── 2. Wikipedia (solo se ha trovato poco) ──
+  // ── 2. Wikipedia IT ──
   if (!contact.note && contact.azienda) {
     try {
       const wUrl = `https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(contact.azienda)}`;
       const wResp = await fetch(wUrl);
       if (wResp.ok) {
         const wiki = await wResp.json();
-        if (wiki.extract && wiki.extract.length > 30) {
+        if (wiki.extract?.length > 30) {
           contact.note = wiki.extract.slice(0, 300);
           if (!contact.settore) contact.settore = guessSector(wiki.extract);
         }
       }
-    } catch(e) { console.log('Wikipedia enrich failed:', e.message); }
+    } catch(e) { console.log('Wiki failed:', e.message); }
   }
 
-  // ── 3. Verifica sito web (fetch homepage title) ──
-  if (contact.sito && !contact.note) {
+  // ── 3. Sito web → leggi description ──
+  const sito = contact.sito || (contact.email ? 'https://' + contact.email.split('@')[1] : '');
+  if (sito && !contact.note) {
     try {
-      const sito = contact.sito.startsWith('http') ? contact.sito : 'https://' + contact.sito;
-      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(sito)}`;
-      const pResp = await fetch(proxy, { signal: AbortSignal.timeout(5000) });
-      const pData = await pResp.json();
-      // Estrai description dalla homepage
-      const descMatch = pData.contents?.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{20,200})["']/i)
-                     || pData.contents?.match(/<meta[^>]+content=["']([^"']{20,200})["'][^>]+name=["']description["']/i);
-      if (descMatch) contact.note = descMatch[1];
-    } catch(e) { console.log('Site fetch failed:', e.message); }
+      const url = sito.startsWith('http') ? sito : 'https://' + sito;
+      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const pData = await (await fetch(proxy, { signal: AbortSignal.timeout(6000) })).json();
+      const html = pData.contents || '';
+      // Descrizione
+      const desc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{20,300})["']/i)
+                || html.match(/<meta[^>]+content=["']([^"']{20,300})["'][^>]+name=["']description["']/i);
+      if (desc && !contact.note) contact.note = desc[1];
+      // Titolo pagina se ancora niente
+      const title = html.match(/<title>([^<]{3,80})<\/title>/i);
+      if (title && !contact.azienda) {
+        contact.azienda = title[1].split(/[\|\-–]/)[0].trim();
+      }
+      // Telefono dalla homepage
+      const tel = html.match(/(?:\+39\s?)?\d[\d\s\-\.]{7,15}\d/);
+      if (tel && !contact.telefono) contact.telefono = tel[0].trim();
+      // Indirizzo dalla homepage
+      const addr = html.match(/(?:Via|Viale|Corso|Piazza|Str\.)\s[A-Za-zÀ-ÿ\s,0-9\.]+\d{5}/i);
+      if (addr && !contact.indirizzo) contact.indirizzo = addr[0].trim();
+      // Settore
+      if (!contact.settore) contact.settore = guessSector(html.slice(0, 5000));
+    } catch(e) { console.log('Site failed:', e.message); }
   }
 }
 
