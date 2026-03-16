@@ -114,11 +114,15 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 </head>
 <body>
 
-<!-- LOADING -->
+<!-- LOADING: mostrato solo brevemente, poi si va avanti -->
 <div id="loading">
   <div class="logo">CARD<span>SCAN</span></div>
-  <div class="spin"></div>
-  <div class="lbl" id="loadLbl">CARICAMENTO OPENCV.JS...<br><span style="font-size:9px;opacity:0.6">(può richiedere qualche secondo)</span></div>
+  <div class="spin" id="loadSpin"></div>
+  <div class="lbl" id="loadLbl">AVVIO IN CORSO...</div>
+  <button id="skipBtn" onclick="forceStart()" style="display:none;margin-top:8px;
+    font-family:'Courier New';font-size:11px;letter-spacing:2px;
+    padding:10px 24px;background:transparent;border:1px solid var(--dim);
+    color:var(--dim);cursor:pointer">AVVIA SENZA RILEVAMENTO AUTO →</button>
 </div>
 
 <!-- ① CAMERA -->
@@ -382,31 +386,50 @@ document.addEventListener('DOMContentLoaded', () => {
 ═══════════════════════════════════════ */
 function cvScriptLoaded() {
   if (typeof cv === 'undefined') { setTimeout(cvScriptLoaded, 300); return; }
-  if (cv.getBuildInformation) onCvReady();
-  else cv.onRuntimeInitialized = onCvReady;
+  if (cv.getBuildInformation) { cvReady = true; document.getElementById('loadSpin').style.borderTopColor='var(--accent)'; }
+  else cv.onRuntimeInitialized = () => { cvReady = true; };
 }
 function cvLoadError() {
-  document.getElementById('loadLbl').innerHTML =
-    'ERRORE CARICAMENTO OPENCV<br>CONTROLLA LA CONNESSIONE<br><br>' +
-    '<button onclick="location.reload()" style="font-family:\'Courier New\';font-size:11px;' +
-    'letter-spacing:2px;padding:10px 20px;background:transparent;border:1px solid #3df5c1;' +
-    'color:#3df5c1;cursor:pointer">↺ RICARICA</button>';
-  document.querySelector('.spin').style.display = 'none';
+  // OpenCV non disponibile - app funziona senza rilevamento automatico
+  cvReady = false;
 }
+
+// ── Avvia l'app subito senza aspettare OpenCV ──
+document.addEventListener('DOMContentLoaded', () => {
+  // Mostra il pulsante skip dopo 2 secondi
+  setTimeout(() => {
+    if (!cvReady) {
+      document.getElementById('loadLbl').textContent = 'CARICAMENTO OPENCV...';
+      document.getElementById('skipBtn').style.display = 'block';
+    }
+  }, 2000);
+  // Avvia comunque dopo 5 secondi anche senza OpenCV
+  setTimeout(() => { if (!document.getElementById('loading').classList.contains('hide')) forceStart(); }, 5000);
+});
+
+function forceStart() {
+  document.getElementById('loading').classList.add('hide');
+  document.getElementById('scrCamera').classList.remove('hide');
+  startCamera();
+}
+
 let _p = 0;
 setTimeout(function poll() {
-  if (cvReady) return;
-  if (typeof cv !== 'undefined' && (cv.getBuildInformation || cv.Mat)) { onCvReady(); return; }
-  if (++_p < 40) setTimeout(poll, 500); // max 20 secondi
-  else cvLoadError();
-}, 2000);
+  if (cvReady) {
+    // OpenCV pronto: avvia se ancora in loading
+    if (!document.getElementById('loading').classList.contains('hide')) forceStart();
+    return;
+  }
+  if (typeof cv !== 'undefined' && (cv.getBuildInformation || cv.Mat)) {
+    cvReady = true;
+    if (!document.getElementById('loading').classList.contains('hide')) forceStart();
+    return;
+  }
+  if (++_p < 30) setTimeout(poll, 500);
+}, 1000);
 
 function onCvReady() {
-  if (cvReady) return;
   cvReady = true;
-  document.getElementById('loading').classList.add('hide');
-  showScreen('scrCamera');
-  startCamera();
 }
 
 /* ═══════════════════════════════════════
@@ -606,6 +629,18 @@ function detectOnFrozen() {
   const gh_d = gw_d / 1.75;
   const gx_d = mh;
   const gy_d = (map.dh - gh_d) / 2;
+
+  // Se OpenCV non è pronto, usa direttamente il riquadro guida come fallback
+  if (!cvReady || typeof cv === 'undefined') {
+    const { rw, rh, ox, oy } = getBox();
+    const iw = $capCanvas.width, ih = $capCanvas.height;
+    const clamp = p => ({ x: Math.max(ox+1,Math.min(ox+rw-1,p.x)), y: Math.max(oy+1,Math.min(oy+rh-1,p.y)) });
+    const d2adj = (dx,dy) => { const vx=map.cropX+dx/map.scale, vy=map.cropY+dy/map.scale; return clamp({x:vx*(rw/map.vw)+ox,y:vy*(rh/map.vh)+oy}); };
+    corners = [ d2adj(gx_d,gy_d), d2adj(gx_d+gw_d,gy_d), d2adj(gx_d+gw_d,gy_d+gh_d), d2adj(gx_d,gy_d+gh_d) ];
+    setSt($adjSt, 'TRASCINA GLI ANGOLI PER AGGIUSTARE (RILEVAMENTO AUTO NON DISPONIBILE)', 'warn');
+    drawAdj(null);
+    return;
+  }
 
   // Converti in coordinate video (frame catturato)
   const vx = Math.max(0, Math.round(map.cropX + gx_d / map.scale));
