@@ -545,8 +545,12 @@ function detectOnFrozen() {
   const roiW = Math.min($capCanvas.width  - roiX, Math.round(gw_v * (1 + EXP*2)));
   const roiH = Math.min($capCanvas.height - roiY, Math.round(gh_v * (1 + EXP*2)));
 
-  // Limiti entro cui tutti i corners devono stare (ROI con 5% tolleranza)
-  const TOL  = 0.05;
+  // Limiti entro cui tutti i corners devono stare = area immagine nel frame video
+  // (esclude completamente le bande nere - ox/oy sono offset letterbox adjCanvas)
+  // Convertiamo i bordi dell'immagine display → video coords
+  // L'immagine display va da (ox,oy) a (ox+rw_adj, oy+rh_adj) - calcolati dopo
+  // Per ora usiamo la ROI stessa come limite (è già dentro l'immagine)
+  const TOL  = 0.03;
   const limX0 = roiX - roiW * TOL, limX1 = roiX + roiW * (1 + TOL);
   const limY0 = roiY - roiH * TOL, limY1 = roiY + roiH * (1 + TOL);
 
@@ -634,24 +638,30 @@ function detectOnFrozen() {
   const {rw, rh, ox, oy} = getBox();
   const iw = $capCanvas.width, ih = $capCanvas.height;
 
+  // Helper: clampa un punto all'area immagine (no bande nere)
+  const clampToImg = p => ({
+    x: Math.max(ox, Math.min(ox+rw, p.x)),
+    y: Math.max(oy, Math.min(oy+rh, p.y))
+  });
+
   if (bestPts) {
-    corners = orderPts(bestPts).map(p => ({
+    corners = orderPts(bestPts).map(p => clampToImg({
       x: p.x * (rw / iw) + ox,
       y: p.y * (rh / ih) + oy
     }));
     setSt($adjSt, 'BORDI RILEVATI — TRASCINA GLI ANGOLI PER AGGIUSTARE', 'ok');
   } else {
-    // Fallback: posiziona angoli esattamente sul riquadro guida (in display coords)
-    const tl_d = { x: gx_d,        y: gy_d };
-    const tr_d = { x: gx_d + gw_d, y: gy_d };
-    const br_d = { x: gx_d + gw_d, y: gy_d + gh_d };
-    const bl_d = { x: gx_d,        y: gy_d + gh_d };
-    // Converti display → video → adjCanvas
+    // Fallback: riquadro guida convertito in adjCanvas coords, clamped
     const toAdj = p => {
       const vp = d2v(p.x, p.y, map);
-      return { x: vp.x * (rw/iw) + ox, y: vp.y * (rh/ih) + oy };
+      return clampToImg({ x: vp.x * (rw/iw) + ox, y: vp.y * (rh/ih) + oy });
     };
-    corners = [tl_d, tr_d, br_d, bl_d].map(toAdj);
+    corners = [
+      { x: gx_d,        y: gy_d },
+      { x: gx_d + gw_d, y: gy_d },
+      { x: gx_d + gw_d, y: gy_d + gh_d },
+      { x: gx_d,        y: gy_d + gh_d }
+    ].map(toAdj);
     setSt($adjSt, 'BORDI NON TROVATI — SPOSTA GLI ANGOLI MANUALMENTE', 'warn');
   }
   drawAdj(null);
@@ -683,7 +693,14 @@ function nearC(pos) {
   return bi;
 }
 function startD(pos){ const i=nearC(pos); if(i<0)return false; dragIdx=i; dragOX=corners[i].x-pos.x; dragOY=corners[i].y-pos.y; return true; }
-function moveD(pos){ if(dragIdx<0)return; const W=$adjCanvas.width,H=$adjCanvas.height; corners[dragIdx].x=Math.max(0,Math.min(W,pos.x+dragOX)); corners[dragIdx].y=Math.max(0,Math.min(H,pos.y+dragOY)); drawAdj(pos); }
+function moveD(pos){ 
+  if(dragIdx<0) return; 
+  const {rw,rh,ox,oy} = getBox();
+  // Limita SOLO all'area immagine (esclude le bande nere)
+  corners[dragIdx].x = Math.max(ox, Math.min(ox+rw, pos.x+dragOX)); 
+  corners[dragIdx].y = Math.max(oy, Math.min(oy+rh, pos.y+dragOY)); 
+  drawAdj(pos); 
+}
 function endD(){ dragIdx=-1; drawAdj(null); }
 
 function onTS(e){e.preventDefault();startD(pt(e,true));}
