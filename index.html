@@ -129,12 +129,22 @@ let step = 'front', frontCanvas = null, backCanvas = null;
 // corners [TL, TR, BR, BL] in display coords
 let corners = null;
 let dragIdx = -1, dragOffX = 0, dragOffY = 0;
-let autoDetect = true;  // false = utente ha già mosso un angolo
+let autoDetect = true;
 let stableCount = 0;
 const STABLE_NEEDED = 3;
-const HIT_R   = 32;   // raggio area touch su ogni angolo
-const LOUPE_R = 60;   // raggio lente
-const LOUPE_Z = 3.0;  // zoom lente
+const HIT_R   = 32;
+const LOUPE_R = 60;
+const LOUPE_Z = 3.0;
+
+// ── Smoothing: media mobile degli ultimi N rilevamenti ──
+const SMOOTH_N  = 6;     // quanti frame mediare
+const LERP_SPD  = 0.25;  // velocità interpolazione verso nuovo valore (0=fermo, 1=snap)
+let   smoothBuf = [];    // ultimi N array di corners rilevati
+let   smoothed  = null;  // corners interpolati correnti (display coords)
+
+// ── Throttle: non elaborare ogni singolo frame per risparmiare CPU ──
+let lastDetectTime = 0;
+const DETECT_INTERVAL_MS = 80; // ~12fps detection, 60fps rendering
 
 // DOM
 const $loading    = id('loading');
@@ -272,18 +282,24 @@ function onMU()  { endDrag(); }
 
 // ━━━━━ MAIN LOOP ━━━━━
 function startLoop() {
-  function tick() {
+  function tick(ts) {
     if ($video.readyState >= 2 && cvReady) {
       resizeOverlay();
       if (autoDetect && dragIdx < 0) {
-        detectCard();
+        // Rilevamento a ~12fps per non bloccare il thread
+        if (ts - lastDetectTime > DETECT_INTERVAL_MS) {
+          lastDetectTime = ts;
+          detectCard();
+        }
+        // Rendering a 60fps con corners interpolati
+        if (smoothed) drawOverlay(smoothed, stableCount >= STABLE_NEEDED, null);
       } else if (dragIdx < 0) {
         drawOverlay(corners, true, null);
       }
     }
     rafId = requestAnimationFrame(tick);
   }
-  tick();
+  requestAnimationFrame(tick);
 }
 
 // ━━━━━ CARD DETECTION ━━━━━
@@ -294,7 +310,8 @@ function detectCard() {
   $procCanvas.width = vw; $procCanvas.height = vh;
   $procCanvas.getContext('2d').drawImage($video, 0, 0);
 
-  const SC = 0.35;
+  // Scala più alta = contorni più precisi (ma più lento — bilanciato dal throttle)
+  const SC = 0.55;
   const sw = Math.round(vw * SC), sh = Math.round(vh * SC);
 
   let src=null, small=null, gray=null, blur=null;
@@ -305,12 +322,13 @@ function detectCard() {
     small = new cv.Mat(); gray = new cv.Mat(); blur = new cv.Mat();
     cv.resize(src, small, new cv.Size(sw, sh));
     cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
+    // Blur leggero: preserva i bordi nitidi
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
 
     for (const [lo, hi] of [[10,40],[25,80],[50,150],[80,220]]) {
       const edges = new cv.Mat();
       cv.Canny(blur, edges, lo, hi);
-      const k = cv.Mat.ones(5, 5, cv.CV_8U);
+      const k = cv.Mat.ones(3, 3, cv.CV_8U); // kernel più piccolo = bordi più precisi
       cv.dilate(edges, edges, k);
       cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k);
       k.delete();
@@ -327,7 +345,8 @@ function detectCard() {
         cv.convexHull(cnt, hull);
         const hArea = cv.contourArea(hull);
         const peri  = cv.arcLength(hull, true);
-        for (const eps of [0.02, 0.03, 0.05, 0.07, 0.10]) {
+        // Epsilon più stretto per contorno più aderente
+        for (const eps of [0.01, 0.015, 0.02, 0.03, 0.05, 0.08]) {
           const ap = new cv.Mat();
           cv.approxPolyDP(hull, ap, eps * peri, true);
           if (ap.rows === 4) {
@@ -357,18 +376,40 @@ function detectCard() {
     stableCount = Math.min(stableCount + 1, STABLE_NEEDED + 5);
     const dw = $overlay.width, dh = $overlay.height;
     const sx = dw / $video.videoWidth, sy = dh / $video.videoHeight;
-    const disp = orderPts(bestPts).map(p => ({ x: p.x*sx, y: p.y*sy }));
+    const raw = orderPts(bestPts).map(p => ({ x: p.x*sx, y: p.y*sy }));
+
+    // ── Aggiungi al buffer di smoothing ──
+    smoothBuf.push(raw);
+    if (smoothBuf.length > SMOOTH_N) smoothBuf.shift();
+
+    // Media dei punti nel buffer
+    const avg = [0,1,2,3].map(i => ({
+      x: smoothBuf.reduce((s,f) => s + f[i].x, 0) / smoothBuf.length,
+      y: smoothBuf.reduce((s,f) => s + f[i].y, 0) / smoothBuf.length
+    }));
+
+    // Interpolazione lineare verso la media (evita salti bruschi)
+    if (!smoothed) {
+      smoothed = avg;
+    } else {
+      smoothed = smoothed.map((p, i) => ({
+        x: p.x + (avg[i].x - p.x) * LERP_SPD,
+        y: p.y + (avg[i].y - p.y) * LERP_SPD
+      }));
+    }
+
     if (stableCount >= STABLE_NEEDED) {
-      corners = disp;
+      corners = smoothed; // corners aggiornati = quello che userà il warp
       $badge.classList.add('show');
       setStatus('RILEVATO — TRASCINA GLI ANGOLI PER AGGIUSTARE', 'ok');
     }
-    drawOverlay(disp, stableCount >= STABLE_NEEDED, null);
   } else {
     stableCount = Math.max(stableCount - 1, 0);
-    if (stableCount === 0) { $badge.classList.remove('show'); }
-    drawOverlay(corners, stableCount > 0, null);
-    setStatus(step==='front' ? 'INQUADRA IL FRONTE DEL BIGLIETTO' : 'GIRA IL BIGLIETTO — INQUADRA IL RETRO', '');
+    if (stableCount === 0) {
+      $badge.classList.remove('show');
+      smoothBuf = [];
+      setStatus(step==='front' ? 'INQUADRA IL FRONTE DEL BIGLIETTO' : 'GIRA IL BIGLIETTO — INQUADRA IL RETRO', '');
+    }
   }
 }
 
@@ -499,6 +540,7 @@ function storeCapture(canvas) {
     $stepLabel.textContent = 'PASSO 2 / 2';
     $captureBtn.textContent = 'SCATTA RETRO';
     stableCount = 0; autoDetect = true;
+    smoothBuf = []; smoothed = null;
     setDefaultCorners();
     $badge.classList.remove('show');
     setStatus('ORA GIRA IL BIGLIETTO — INQUADRA IL RETRO', 'warn');
@@ -512,6 +554,7 @@ function storeCapture(canvas) {
 
 function resetCorners() {
   autoDetect = true; stableCount = 0;
+  smoothBuf = []; smoothed = null;
   setDefaultCorners();
   setStatus('RILEVAMENTO IN CORSO...', '');
 }
@@ -579,6 +622,7 @@ function downloadResult() {
 function resetApp() {
   frontCanvas = backCanvas = null;
   step = 'front'; stableCount = 0; autoDetect = true; dragIdx = -1;
+  smoothBuf = []; smoothed = null;
   $stepLabel.textContent = 'PASSO 1 / 2'; $captureBtn.textContent = 'SCATTA FRONTE';
   resetThumb('thumbFront','FRONTE'); resetThumb('thumbBack','RETRO');
   $badge.classList.remove('show');
