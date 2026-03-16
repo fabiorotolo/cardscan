@@ -503,42 +503,39 @@ function showAdjust(editing) {
 function detectOnFrozen() {
   const iw = $capCanvas.width, ih = $capCanvas.height;
 
-  // ── Calcola ROI basata sul riquadro guida (stesso usato nella camera)
-  // Il riquadro è: margin=8% su ogni lato orizzontale, centrato verticalmente, h=w/1.75
-  // Espandiamo del 15% per sicurezza
-  const expand = 0.15;
+  // Riquadro guida (stesso della camera): margine 8% orizzontale, h=w/1.75
   const gw = iw * (1 - 0.08*2);
   const gh = gw / 1.75;
   const gx = iw * 0.08;
   const gy = (ih - gh) / 2;
-  const roiX = Math.max(0, Math.round(gx - gw*expand));
-  const roiY = Math.max(0, Math.round(gy - gh*expand));
-  const roiW = Math.min(iw - roiX, Math.round(gw*(1+expand*2)));
-  const roiH = Math.min(ih - roiY, Math.round(gh*(1+expand*2)));
 
-  const SC = 0.6;
+  // ROI: espandi del 12% per catturare bordi leggermente fuori dal riquadro
+  const EXP = 0.12;
+  const roiX = Math.max(0, Math.round(gx - gw*EXP));
+  const roiY = Math.max(0, Math.round(gy - gh*EXP));
+  const roiW = Math.min(iw - roiX, Math.round(gw*(1 + EXP*2)));
+  const roiH = Math.min(ih - roiY, Math.round(gh*(1 + EXP*2)));
+
+  // Limiti entro cui TUTTI i corners devono stare (ROI + 5% tolleranza)
+  const TOL  = 0.05;
+  const limX0 = roiX - roiW*TOL, limX1 = roiX + roiW*(1+TOL);
+  const limY0 = roiY - roiH*TOL, limY1 = roiY + roiH*(1+TOL);
+
+  const SC = 0.65;
   const sw = Math.round(roiW*SC), sh = Math.round(roiH*SC);
 
-  let src=null,roi=null,small=null,gray=null,blur=null,eq=null;
-  let bestPts=null, bestArea=0;
+  let src=null, roi=null, small=null, gray=null, blur=null, eq=null;
+  let bestPts=null, bestScore=0;
 
   try {
     src = cv.imread($capCanvas);
-
-    // Ritaglia ROI
     const rect = new cv.Rect(roiX, roiY, roiW, roiH);
-    roi = src.roi(rect);
-
+    roi   = src.roi(rect);
     small = new cv.Mat(); gray = new cv.Mat(); blur = new cv.Mat(); eq = new cv.Mat();
     cv.resize(roi, small, new cv.Size(sw, sh));
     cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
-
-    // Equalizzazione istogramma → migliora contrasto per rilevamento
     cv.equalizeHist(gray, eq);
     cv.GaussianBlur(eq, blur, new cv.Size(5,5), 0);
-
-    // Aspect ratio attesi: biglietto ~1.75, A4-like ~1.41, range accettabile 1.3-2.2
-    const RATIO_MIN = 1.25, RATIO_MAX = 2.3;
 
     for (const [lo,hi] of [[10,40],[25,80],[50,140],[80,210]]) {
       const edges = new cv.Mat();
@@ -552,41 +549,56 @@ function detectOnFrozen() {
       const ctrs = new cv.MatVector(), hier = new cv.Mat();
       cv.findContours(edges, ctrs, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
-      const minA = sw*sh*0.04; // almeno 4% dell'area ROI
+      const minA = sw * sh * 0.05; // almeno 5% area ROI
+
       for (let i=0; i<ctrs.size(); i++) {
         const cnt  = ctrs.get(i);
         const area = cv.contourArea(cnt);
-        if (area<minA||area>sw*sh*0.98) { cnt.delete(); continue; }
+        if (area < minA || area > sw*sh*0.97) { cnt.delete(); continue; }
+
         const hull = new cv.Mat();
         cv.convexHull(cnt, hull);
         const hArea = cv.contourArea(hull);
         const peri  = cv.arcLength(hull, true);
-        for (const eps of [0.01,0.015,0.02,0.03,0.05,0.08]) {
+
+        for (const eps of [0.01, 0.015, 0.02, 0.03, 0.05, 0.07]) {
           const ap = new cv.Mat();
           cv.approxPolyDP(hull, ap, eps*peri, true);
+
           if (ap.rows === 4) {
-            const pts=[];
-            for (let j=0;j<4;j++) pts.push({
-              // Riconverti da ROI-scaled a immagine intera
-              x: ap.data32S[j*2]/SC + roiX,
-              y: ap.data32S[j*2+1]/SC + roiY
+            // Converti in coordinate immagine intera
+            const pts = [];
+            for (let j=0; j<4; j++) pts.push({
+              x: ap.data32S[j*2] / SC + roiX,
+              y: ap.data32S[j*2+1] / SC + roiY
             });
+
+            // ── FILTRO CHIAVE: tutti e 4 gli angoli devono stare dentro la ROI ──
+            const allInside = pts.every(p =>
+              p.x >= limX0 && p.x <= limX1 &&
+              p.y >= limY0 && p.y <= limY1
+            );
+            if (!allInside) { ap.delete(); continue; }
+
             const [tl,tr,br,bl] = orderPts(pts);
-            const w = Math.hypot(tr.x-tl.x,tr.y-tl.y);
-            const h = Math.hypot(bl.x-tl.x,bl.y-tl.y);
-            const ratio = Math.max(w,h)/(Math.min(w,h)||1);
-            // Penalizza se ratio non è nel range atteso
-            const ratioScore = (ratio>=RATIO_MIN&&ratio<=RATIO_MAX) ? 1.0 : 0.3;
-            const score = hArea * ratioScore;
-            if (score > bestArea) { bestPts=pts; bestArea=score; }
+            const w = Math.hypot(tr.x-tl.x, tr.y-tl.y);
+            const h = Math.hypot(bl.x-tl.x, bl.y-tl.y);
+            const ratio = Math.max(w,h) / (Math.min(w,h) || 1);
+
+            // Score: area * bonus aspect ratio (preferisce rapporti 1.3-2.0)
+            const ratioBonus = (ratio >= 1.3 && ratio <= 2.0) ? 1.4
+                             : (ratio >= 1.1 && ratio <= 2.4) ? 1.0 : 0.4;
+            const score = hArea * ratioBonus;
+
+            if (score > bestScore) { bestPts = pts; bestScore = score; }
           }
           ap.delete();
-          if (bestPts && bestArea > sw*sh*0.15) break;
+          if (bestPts && bestScore > sw*sh*0.2) break;
         }
         hull.delete(); cnt.delete();
       }
       ctrs.delete(); hier.delete(); edges.delete();
-      if (bestPts && bestArea > sw*sh*0.15) break;
+      if (bestPts && bestScore > sw*sh*0.2) break;
     }
   } catch(e) { console.error('CV:',e); }
   finally { [src,roi,small,gray,blur,eq].forEach(m=>{try{if(m)m.delete()}catch(_){}}); }
@@ -594,23 +606,19 @@ function detectOnFrozen() {
   const {rw,rh,ox,oy} = getBox();
   if (bestPts) {
     corners = orderPts(bestPts).map(p => ({
-      x: p.x*(rw/$capCanvas.width)+ox,
-      y: p.y*(rh/$capCanvas.height)+oy
+      x: p.x * (rw/iw) + ox,
+      y: p.y * (rh/ih) + oy
     }));
-    setSt($adjSt,'BORDI RILEVATI — TRASCINA GLI ANGOLI PER AGGIUSTARE','ok');
+    setSt($adjSt, 'BORDI RILEVATI — TRASCINA GLI ANGOLI PER AGGIUSTARE', 'ok');
   } else {
-    // Fallback: usa esattamente il riquadro guida come default
-    const gxD = ox + (gx/iw)*rw;
-    const gyD = oy + (gy/ih)*rh;
-    const gwD = (gw/iw)*rw;
-    const ghD = (gh/ih)*rh;
-    corners=[
-      {x:gxD,      y:gyD},
-      {x:gxD+gwD,  y:gyD},
-      {x:gxD+gwD,  y:gyD+ghD},
-      {x:gxD,      y:gyD+ghD}
+    // Fallback: usa esattamente il riquadro guida
+    corners = [
+      { x: ox + (gx/iw)*rw,        y: oy + (gy/ih)*rh },
+      { x: ox + ((gx+gw)/iw)*rw,   y: oy + (gy/ih)*rh },
+      { x: ox + ((gx+gw)/iw)*rw,   y: oy + ((gy+gh)/ih)*rh },
+      { x: ox + (gx/iw)*rw,        y: oy + ((gy+gh)/ih)*rh }
     ];
-    setSt($adjSt,'BORDI NON TROVATI — SPOSTA GLI ANGOLI MANUALMENTE','warn');
+    setSt($adjSt, 'BORDI NON TROVATI — SPOSTA GLI ANGOLI MANUALMENTE', 'warn');
   }
   drawAdj(null);
 }
