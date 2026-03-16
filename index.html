@@ -1389,9 +1389,9 @@ function parseBusinessCard(text) {
   const ruoloIdx = remaining.findIndex(l => ruoloKeywords.test(l) && l.length < 80);
   if (ruoloIdx >= 0) {
     ruolo = remaining[ruoloIdx]
-      .replace(/[^a-zA-ZÀ-ÿ\s\-\/\.]/g,' ')   // rimuovi simboli non-lettera
-      .replace(/\b[A-Z]{2,}\b/g, '')            // rimuovi sigle tutte maiuscole (es. ISAF, SRL)
-      .replace(/\b[A-Z]{1}\b/g, '')             // rimuovi lettere singole maiuscole
+      .replace(/[^a-zA-ZÀ-ÿ\s\-\/]/g,' ')  // rimuovi tutto tranne lettere, spazi, - /
+      .replace(/\b[A-Z]{2,}\b/g, '')         // rimuovi sigle tutte maiuscole (ISAF, SRL...)
+      .replace(/\b[a-zA-Z]{1,2}\b/g, '')     // rimuovi parole di 1-2 lettere (ls, e, a...)
       .replace(/\s{2,}/g,' ').trim();
     remaining.splice(ruoloIdx, 1);
   }
@@ -1406,10 +1406,12 @@ function parseBusinessCard(text) {
   });
   if (nameIdx >= 0) {
     nome = remaining[nameIdx]
-      .replace(/^\d+\s*/,'')          // rimuovi numeri iniziali (es. "4 Gianni" → "Gianni")
-      .replace(/\s+[a-z]$/i,'')       // rimuovi lettera singola finale (es. "Turcatti e")
-      .replace(/^[a-z]\s+/i,'')       // rimuovi lettera singola iniziale
+      .replace(/^\d+\s*/,'')              // numeri iniziali
+      .replace(/[^a-zA-ZÀ-ÿ\s\-\']/g,' ') // rimuovi tutti i non-lettera (>, |, ecc.)
+      .replace(/\s{2,}/g,' ')
       .trim();
+    // Rimuovi parole di una lettera ai bordi
+    nome = nome.replace(/^\s*[a-zA-Z]\s+/,'').replace(/\s+[a-zA-Z]\s*$/,'').trim();
     remaining.splice(nameIdx, 1);
   }
 
@@ -1475,17 +1477,45 @@ async function manualEnrich() {
   document.querySelectorAll('#aiFields input[data-key]').forEach(inp => {
     if (currentContact) currentContact[inp.dataset.key] = inp.value;
   });
+
   const btn = document.getElementById('aiSearchBtn');
   btn.textContent = '⏳ RICERCA IN CORSO...';
   btn.disabled = true;
-  setSt(document.getElementById('aiSt'), 'RICERCA IN CORSO...', '');
+  setSt(document.getElementById('aiSt'), 'RICERCA SUL WEB IN CORSO...', '');
+
+  // Snapshot dei valori prima della ricerca
+  const before = {};
+  AI_FIELDS.forEach(f => { before[f.key] = currentContact[f.key] || ''; });
 
   await enrichContact(currentContact);
+
+  // Mostra i campi aggiornati evidenziando i nuovi
   renderAIFields(currentContact);
+
+  // Conta quanti campi sono stati aggiornati
+  let updated = 0;
+  AI_FIELDS.forEach(f => {
+    const was = before[f.key];
+    const now = currentContact[f.key] || '';
+    if (now && now !== was) {
+      updated++;
+      // Evidenzia il campo aggiornato in verde per 3 secondi
+      const inputs = document.querySelectorAll(`#aiFields input[data-key="${f.key}"]`);
+      inputs.forEach(inp => {
+        inp.style.color = '#3df5c1';
+        inp.style.fontWeight = 'bold';
+        setTimeout(() => { inp.style.color = ''; inp.style.fontWeight = ''; }, 3000);
+      });
+    }
+  });
 
   btn.textContent = '🔍 CERCA SU WEB';
   btn.disabled = false;
-  setSt(document.getElementById('aiSt'), 'RICERCA COMPLETATA — CONTROLLA I CAMPI', 'ok');
+
+  const msg = updated > 0
+    ? `✓ ${updated} CAMPI AGGIORNATI — CONTROLLA E SALVA`
+    : 'NESSUNA INFO AGGIUNTIVA TROVATA SUL WEB';
+  setSt(document.getElementById('aiSt'), msg, updated > 0 ? 'ok' : 'warn');
 }
 
 async function enrichContact(contact) {
