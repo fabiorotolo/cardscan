@@ -239,7 +239,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
     <!-- Stato loading -->
     <div id="aiLoading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;gap:16px">
       <div class="spin"></div>
-      <div style="font-size:11px;letter-spacing:3px;color:var(--dim)">CLAUDE STA LEGGENDO IL BIGLIETTO...</div>
+      <div id="aiLoadMsg" style="font-size:11px;letter-spacing:3px;color:var(--dim)">CARICAMENTO...</div>
     </div>
     <!-- Miniatura biglietto -->
     <div id="aiCardThumb" style="display:none;margin-bottom:16px;text-align:center">
@@ -1247,61 +1247,63 @@ const AI_FIELDS = [
 
 async function analyzeWithAI() {
   showScreen('scrAI');
-  document.getElementById('aiLoading').style.display = 'flex';
-  document.getElementById('aiFields').style.display  = 'none';
+  document.getElementById('aiLoading').style.display   = 'flex';
+  document.getElementById('aiFields').style.display    = 'none';
   document.getElementById('aiCardThumb').style.display = 'none';
-  document.getElementById('aiSaveBtn').style.display = 'none';
+  document.getElementById('aiSaveBtn').style.display   = 'none';
   document.getElementById('aiSt').textContent = '';
   document.getElementById('aiTag').textContent = 'LETTURA OCR';
   currentContact = null;
 
-  const thumbUrl = $resultCanvas.toDataURL('image/jpeg', 0.8);
-  document.getElementById('aiThumbImg').src = thumbUrl;
-
-  // Usa il fronte per l'OCR
   const imgCanvas = cards.front.cropped || $resultCanvas;
+  document.getElementById('aiThumbImg').src = $resultCanvas.toDataURL('image/jpeg', 0.7);
+
+  const setMsg = t => { const e = document.getElementById('aiLoadMsg'); if(e) e.textContent = t; };
+
+  const showForm = (contact, msg, type) => {
+    currentContact = contact;
+    renderAIFields(contact);
+    document.getElementById('aiLoading').style.display   = 'none';
+    document.getElementById('aiFields').style.display    = 'flex';
+    document.getElementById('aiCardThumb').style.display = 'block';
+    document.getElementById('aiSaveBtn').style.display   = 'block';
+    setSt(document.getElementById('aiSt'), msg, type);
+  };
 
   try {
-    // Carica Tesseract.js da CDN se non ancora caricato
+    setMsg('CARICAMENTO LIBRERIA OCR...');
+
     if (typeof Tesseract === 'undefined') {
-      await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+      await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@4.1.4/dist/tesseract.min.js');
     }
 
-    document.getElementById('aiLoading').querySelector('div').textContent = 'LETTURA TESTO IN CORSO...';
+    setMsg('LETTURA TESTO... 0%');
 
-    // OCR con lingua italiana+inglese
-    const result = await Tesseract.recognize(imgCanvas, 'ita+eng', {
+    const { data: { text } } = await Tesseract.recognize(imgCanvas, 'ita+eng', {
       logger: m => {
-        if (m.status === 'recognizing text') {
-          const pct = Math.round(m.progress * 100);
-          const el = document.getElementById('aiLoading').querySelector('div');
-          if (el) el.textContent = `LETTURA TESTO... ${pct}%`;
-        }
+        if (m.status === 'recognizing text')
+          setMsg('LETTURA TESTO... ' + Math.round(m.progress * 100) + '%');
       }
     });
 
-    const rawText = result.data.text;
-    console.log('OCR result:', rawText);
-
-    // Parsing intelligente del testo
-    const contact = parseBusinessCard(rawText);
-    contact.id      = Date.now();
-    contact.imgFront  = imgCanvas.toDataURL('image/jpeg', 0.6);
-    contact.imgResult = $resultCanvas.toDataURL('image/jpeg', 0.6);
+    console.log('OCR:', text);
+    const contact = parseBusinessCard(text);
+    contact.id        = Date.now();
+    contact.imgFront  = imgCanvas.toDataURL('image/jpeg', 0.55);
+    contact.imgResult = $resultCanvas.toDataURL('image/jpeg', 0.55);
     contact.savedAt   = new Date().toLocaleDateString('it-IT');
-    currentContact = contact;
-
-    renderAIFields(currentContact);
-    document.getElementById('aiLoading').style.display  = 'none';
-    document.getElementById('aiFields').style.display   = 'flex';
-    document.getElementById('aiCardThumb').style.display = 'block';
-    document.getElementById('aiSaveBtn').style.display  = 'block';
-    setSt(document.getElementById('aiSt'), 'CONTROLLA E MODIFICA I CAMPI, POI SALVA', 'ok');
+    showForm(contact, 'CONTROLLA I CAMPI E SALVA', 'ok');
 
   } catch(e) {
     console.error('OCR error:', e);
-    document.getElementById('aiLoading').style.display = 'none';
-    setSt(document.getElementById('aiSt'), 'ERRORE LETTURA — RIPROVA', 'warn');
+    // Fallback: form vuoto da compilare a mano
+    const contact = { nome:'', azienda:'', ruolo:'', settore:'', indirizzo:'', telefono:'', email:'', sito:'', note:'',
+      id: Date.now(),
+      imgFront:  imgCanvas.toDataURL('image/jpeg', 0.55),
+      imgResult: $resultCanvas.toDataURL('image/jpeg', 0.55),
+      savedAt:   new Date().toLocaleDateString('it-IT')
+    };
+    showForm(contact, 'OCR NON DISPONIBILE — COMPILA I CAMPI MANUALMENTE', 'warn');
   }
 }
 
