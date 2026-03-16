@@ -96,9 +96,9 @@
     <div class="hdr-logo">CARDSCAN</div>
     <div class="hdr-tag" id="camTag">PASSO 1 / 2</div>
   </div>
-  <div class="cam-wrap">
+  <div class="cam-wrap" id="camWrap">
     <video id="video" autoplay playsinline muted></video>
-    <div class="guide"><i></i></div>
+    <canvas id="camOverlay" style="position:absolute;inset:0;pointer-events:none"></canvas>
   </div>
   <div class="panel">
     <div class="thumbs">
@@ -236,6 +236,10 @@ function onCvReady(){
 // ══════════════════════════════════════
 //  CAMERA
 // ══════════════════════════════════════
+let camRaf = null;
+const $camOv = document.getElementById('camOverlay');
+const camCtx = $camOv.getContext('2d');
+
 async function startCamera(){
   try{
     stream=await navigator.mediaDevices.getUserMedia({
@@ -243,13 +247,66 @@ async function startCamera(){
       audio:false
     });
     $video.srcObject=stream;
-    await $video.play();
+    $video.onloadedmetadata=()=>{ $video.play(); startCamGuide(); };
   }catch(e){
     $camSt.textContent='ERRORE FOTOCAMERA: '+e.message;
     $camSt.className='st warn';
   }
 }
+
+function startCamGuide(){
+  if(camRaf) cancelAnimationFrame(camRaf);
+  function tick(){
+    const W=$camOv.offsetWidth, H=$camOv.offsetHeight;
+    if($camOv.width!==W||$camOv.height!==H){$camOv.width=W;$camOv.height=H}
+    drawCamGuide(W,H);
+    camRaf=requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function drawCamGuide(W,H){
+  camCtx.clearRect(0,0,W,H);
+  // Rettangolo guida proporzionato a un biglietto da visita (rapporto ~1.75:1)
+  const margin=W*0.08;
+  const gw=W-margin*2;
+  const gh=Math.round(gw/1.75);
+  const gx=margin;
+  const gy=(H-gh)/2;
+
+  // Scurisce l'esterno
+  camCtx.fillStyle='rgba(0,0,0,0.38)';
+  camCtx.fillRect(0,0,W,H);
+  camCtx.clearRect(gx,gy,gw,gh); // "buco" trasparente
+
+  // Bordo tratteggiato
+  camCtx.strokeStyle='rgba(255,255,255,0.6)';
+  camCtx.lineWidth=1.5;
+  camCtx.setLineDash([8,6]);
+  camCtx.strokeRect(gx,gy,gw,gh);
+  camCtx.setLineDash([]);
+
+  // Angoli colorati
+  const CL=22, CW=3;
+  const col='#3df5c1';
+  camCtx.strokeStyle=col; camCtx.lineWidth=CW;
+  [
+    [gx,gy,1,1],[gx+gw,gy,-1,1],[gx+gw,gy+gh,-1,-1],[gx,gy+gh,1,-1]
+  ].forEach(([x,y,dx,dy])=>{
+    camCtx.beginPath();
+    camCtx.moveTo(x+dx*CL,y); camCtx.lineTo(x,y); camCtx.lineTo(x,y+dy*CL);
+    camCtx.stroke();
+  });
+
+  // Label
+  camCtx.fillStyle='rgba(61,245,193,0.85)';
+  camCtx.font='bold 11px "Courier New"';
+  camCtx.textAlign='center';
+  camCtx.fillText('POSIZIONA IL BIGLIETTO QUI', W/2, gy-10>8?gy-10:gy+gh+18);
+}
+
 function stopCamera(){
+  if(camRaf){cancelAnimationFrame(camRaf);camRaf=null}
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
 }
 
@@ -257,8 +314,20 @@ function stopCamera(){
 //  ① SCATTA
 // ══════════════════════════════════════
 function onShoot(){
+  // Aspetta che il video sia pronto
+  if($video.readyState<2){
+    $camSt.textContent='FOTOCAMERA IN AVVIO — RIPROVA';
+    $camSt.className='st warn';
+    setTimeout(()=>{$camSt.textContent='INQUADRA IL BIGLIETTO E SCATTA';$camSt.className='st';},1500);
+    return;
+  }
   const vw=$video.videoWidth, vh=$video.videoHeight;
-  if(!vw||!vh) return;
+  if(!vw||!vh){
+    $camSt.textContent='VIDEO NON PRONTO — RIPROVA';
+    $camSt.className='st warn';
+    return;
+  }
+  stopCamera(); // ferma la guida live
   $capCanvas.width=vw; $capCanvas.height=vh;
   $capCanvas.getContext('2d').drawImage($video,0,0);
 
@@ -293,6 +362,7 @@ function onRetry(){
   hideAll();
   $camScr.classList.remove('hide');
   if(!stream) startCamera();
+  else startCamGuide();
 }
 
 // ══════════════════════════════════════
@@ -576,7 +646,7 @@ function onPreviewNext(){
     $camSt.className='st warn';
     hideAll();
     $camScr.classList.remove('hide');
-    if(!stream) startCamera();
+    if(!stream) startCamera(); else startCamGuide();
   }else{
     // Genera risultato finale
     stopCamera();
