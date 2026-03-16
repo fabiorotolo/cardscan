@@ -27,17 +27,19 @@
     /* ── SCHERMI ── */
     .screen{display:flex;flex-direction:column;height:100vh}
     .screen.hide{display:none}
+
     .hdr{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border);background:var(--surf)}
     .hdr-logo{font-size:16px;letter-spacing:6px;color:var(--accent)}
     .hdr-tag{font-size:11px;letter-spacing:2px;color:var(--dim);padding:4px 10px;border:1px solid var(--border)}
     .hdr-tag.ok{color:var(--accent);border-color:var(--accent)}
+    .hdr-tag.warn{color:var(--warn);border-color:var(--warn)}
 
-    /* ── CAMERA ── */
-    .cam-wrap{position:relative;flex:1;overflow:hidden;background:#000}
+    .cam-wrap{position:relative;flex:1;overflow:hidden;background:#000;display:flex;align-items:center;justify-content:center}
     #video{width:100%;height:100%;object-fit:cover;display:block}
-    /* guide corners statici */
+
+    /* guide angoli statici camera */
     .guide{position:absolute;inset:12%;pointer-events:none}
-    .guide::before,.guide::after,.guide i::before,.guide i::after{content:'';position:absolute;width:22px;height:22px;border-color:rgba(255,255,255,.25);border-style:solid}
+    .guide::before,.guide::after,.guide i::before,.guide i::after{content:'';position:absolute;width:22px;height:22px;border-color:rgba(255,255,255,.22);border-style:solid}
     .guide::before{top:0;left:0;border-width:2px 0 0 2px}
     .guide::after{top:0;right:0;border-width:2px 2px 0 0}
     .guide i::before{bottom:0;left:0;border-width:0 0 2px 2px}
@@ -54,18 +56,23 @@
     .tlbl{font-size:10px;letter-spacing:2px;color:var(--dim);text-align:center;margin-top:4px}
     .st{font-size:12px;letter-spacing:1px;color:var(--dim);text-align:center;min-height:18px;margin-bottom:12px;transition:color .3s}
     .st.ok{color:var(--accent)} .st.warn{color:var(--warn)}
-    .btn{display:block;width:100%;padding:14px 20px;background:transparent;border:1px solid var(--accent);color:var(--accent);font-family:var(--font);font-size:13px;letter-spacing:4px;cursor:pointer;transition:background .2s,color .2s;-webkit-tap-highlight-color:transparent;margin-bottom:8px}
+
+    .btn{display:block;width:100%;padding:14px 20px;background:transparent;border:1px solid var(--accent);color:var(--accent);font-family:var(--font);font-size:12px;letter-spacing:3px;cursor:pointer;transition:background .2s,color .2s;-webkit-tap-highlight-color:transparent;margin-bottom:8px}
     .btn:last-child{margin-bottom:0}
     .btn:active,.btn:hover{background:var(--accent);color:var(--bg)}
     .btn.sec{border-color:var(--dim);color:var(--dim)}
     .btn.sec:active,.btn.sec:hover{background:var(--dim);color:var(--bg)}
-    .btn.danger{border-color:var(--warn);color:var(--warn)}
-    .btn.danger:active,.btn.danger:hover{background:var(--warn);color:var(--bg)}
+    .btn.warn{border-color:var(--warn);color:var(--warn)}
+    .btn.warn:active,.btn.warn:hover{background:var(--warn);color:var(--bg)}
+    .btn-row{display:flex;gap:8px}
+    .btn-row .btn{margin-bottom:0}
 
-    /* ── ADJUST SCREEN ── */
-    #adjustScreen .cam-wrap{position:relative}
-    #frozenImg{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+    /* ── ADJUST ── */
     #adjOverlay{position:absolute;inset:0;touch-action:none}
+    #frozenImg{max-width:100%;max-height:100%;object-fit:contain;display:block}
+
+    /* ── PREVIEW ── */
+    #previewImg{max-width:100%;max-height:100%;object-fit:contain;display:block}
 
     /* ── RESULT ── */
     .result-area{flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;background:var(--surf2);padding:20px}
@@ -83,8 +90,8 @@
   <div class="lbl" id="loadLbl">CARICAMENTO OPENCV.JS...</div>
 </div>
 
-<!-- ① CAMERA SCREEN -->
-<div id="cameraScreen" class="screen hide">
+<!-- ① CAMERA -->
+<div id="camScr" class="screen hide">
   <div class="hdr">
     <div class="hdr-logo">CARDSCAN</div>
     <div class="hdr-tag" id="camTag">PASSO 1 / 2</div>
@@ -98,39 +105,57 @@
       <div class="tw"><div class="tb" id="tbFront"><span class="ph">FRONTE</span></div><div class="tlbl">FRONTE</div></div>
       <div class="tw"><div class="tb" id="tbBack"><span class="ph">RETRO</span></div><div class="tlbl">RETRO</div></div>
     </div>
-    <div class="st" id="camStatus">INQUADRA IL BIGLIETTO E SCATTA</div>
+    <div class="st" id="camSt">INQUADRA IL BIGLIETTO E SCATTA</div>
     <button class="btn" id="shootBtn" onclick="onShoot()">📷 SCATTA FRONTE</button>
   </div>
 </div>
 
-<!-- ② ADJUST SCREEN (fermo immagine + angoli) -->
-<div id="adjustScreen" class="screen hide">
+<!-- ② ADJUST (fermo immagine + angoli trascinabili) -->
+<div id="adjScr" class="screen hide">
   <div class="hdr">
     <div class="hdr-logo">CARDSCAN</div>
-    <div class="hdr-tag" id="adjTag">AGGIUSTA I BORDI</div>
+    <div class="hdr-tag warn" id="adjTag">AGGIUSTA I BORDI</div>
   </div>
   <div class="cam-wrap" id="adjWrap">
     <img id="frozenImg" alt="">
     <canvas id="adjOverlay"></canvas>
   </div>
   <div class="panel">
-    <div class="st ok" id="adjStatus">TRASCINA GLI ANGOLI PER AGGIUSTARE</div>
-    <button class="btn" onclick="onConfirm()">✓ CONFERMA E RITAGLIA</button>
-    <button class="btn danger" onclick="onRetry()">↩ RISCATTA</button>
+    <div class="st" id="adjSt">TRASCINA GLI ANGOLI PER AGGIUSTARE IL RITAGLIO</div>
+    <div class="btn-row">
+      <button class="btn" onclick="onConfirm()">✓ CONFERMA RITAGLIO</button>
+      <button class="btn warn" style="flex:0 0 auto;width:auto;padding:14px 16px" onclick="onRetry()">↩</button>
+    </div>
   </div>
 </div>
 
-<!-- ③ RESULT SCREEN -->
-<div id="resultScreen" class="screen hide">
+<!-- ③ PREVIEW ritaglio -->
+<div id="previewScr" class="screen hide">
+  <div class="hdr">
+    <div class="hdr-logo">CARDSCAN</div>
+    <div class="hdr-tag ok" id="prevTag">FRONTE ✓</div>
+  </div>
+  <div class="cam-wrap">
+    <img id="previewImg" alt="">
+  </div>
+  <div class="panel">
+    <div class="st ok" id="prevSt">FRONTE SALVATO — CONTROLLA IL RITAGLIO</div>
+    <button class="btn" id="prevNextBtn" onclick="onPreviewNext()">📷 SCATTA RETRO</button>
+    <button class="btn sec" onclick="onEditCrop()">✏️ MODIFICA RITAGLIO</button>
+  </div>
+</div>
+
+<!-- ④ RESULT -->
+<div id="resScr" class="screen hide">
   <div class="hdr">
     <div class="hdr-logo">CARDSCAN</div>
     <div class="hdr-tag ok">COMPLETATO ✓</div>
   </div>
   <div class="result-area"><canvas id="resultCanvas"></canvas></div>
   <div class="panel">
-    <div class="st ok">SCANSIONE COMPLETATA — FRONTE + RETRO</div>
+    <div class="st ok">FRONTE + RETRO PRONTI</div>
     <button class="btn" onclick="downloadResult()">💾 SALVA IN PNG</button>
-    <button class="btn sec" onclick="resetApp()">↩ NUOVA SCANSIONE</button>
+    <button class="btn sec" onclick="resetApp()">🔄 NUOVA SCANSIONE</button>
   </div>
 </div>
 
@@ -140,53 +165,65 @@
 <script>
 'use strict';
 
-// ═══════════ STATE ═══════════
+// ══════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════
 let cvReady = false, stream = null;
-let step = 'front';          // 'front' | 'back'
-let frontCanvas = null, backCanvas = null;
-let frozenDataUrl = null;    // foto congelata (per adjust screen)
+let step = 'front';   // 'front' | 'back'
 
-// Corners in coords RELATIVE all'immagine congelata visualizzata
-// [TL, TR, BR, BL]
+// Per ogni lato conserviamo la foto intera E i corners
+let data = {
+  front: { fullCanvas: null, corners: null, croppedCanvas: null },
+  back:  { fullCanvas: null, corners: null, croppedCanvas: null }
+};
+
+// Angoli correnti in coords display (aggiornati durante il drag)
 let corners = null;
 let dragIdx = -1, dragOffX = 0, dragOffY = 0;
 
-const HIT_R  = 34;
+const HIT_R   = 34;
 const LOUPE_R = 62;
 const LOUPE_Z = 3.2;
 
-// DOM
-const $ = id => document.getElementById(id);
+// ── DOM ──
+const $  = s => document.getElementById(s);
 const $loading  = $('loading');
 const $loadLbl  = $('loadLbl');
-const $camScr   = $('cameraScreen');
-const $adjScr   = $('adjustScreen');
-const $resScr   = $('resultScreen');
+const $camScr   = $('camScr');
+const $adjScr   = $('adjScr');
+const $prevScr  = $('previewScr');
+const $resScr   = $('resScr');
 const $video    = $('video');
 const $shootBtn = $('shootBtn');
 const $camTag   = $('camTag');
-const $camSt    = $('camStatus');
+const $camSt    = $('camSt');
 const $adjTag   = $('adjTag');
-const $adjSt    = $('adjStatus');
+const $adjSt    = $('adjSt');
 const $frozenImg= $('frozenImg');
 const $adjWrap  = $('adjWrap');
 const $adjOv    = $('adjOverlay');
+const $prevImg  = $('previewImg');
+const $prevTag  = $('prevTag');
+const $prevSt   = $('prevSt');
+const $prevNext = $('prevNextBtn');
 const $procCanvas=$('procCanvas');
 const $capCanvas =$('capCanvas');
 const adjCtx    = $adjOv.getContext('2d');
 
-// ═══════════ OPENCV ═══════════
+// ══════════════════════════════════════
+//  OPENCV INIT
+// ══════════════════════════════════════
 function cvScriptLoaded(){
   if(typeof cv==='undefined'){setTimeout(cvScriptLoaded,300);return}
   if(cv.getBuildInformation) onCvReady();
   else cv.onRuntimeInitialized=onCvReady;
 }
-let pollN=0;
-setTimeout(function poll(){
+let _poll=0;
+setTimeout(function p(){
   if(cvReady)return;
   if(typeof cv!=='undefined'&&(cv.getBuildInformation||cv.Mat)){onCvReady();return}
-  if(++pollN<60)setTimeout(poll,500);
-  else $loadLbl.textContent='ERRORE — RICARICA';
+  if(++_poll<60)setTimeout(p,500);
+  else $loadLbl.textContent='ERRORE — RICARICA LA PAGINA';
 },2000);
 
 function onCvReady(){
@@ -196,7 +233,9 @@ function onCvReady(){
   startCamera();
 }
 
-// ═══════════ CAMERA ═══════════
+// ══════════════════════════════════════
+//  CAMERA
+// ══════════════════════════════════════
 async function startCamera(){
   try{
     stream=await navigator.mediaDevices.getUserMedia({
@@ -205,46 +244,64 @@ async function startCamera(){
     });
     $video.srcObject=stream;
     await $video.play();
-  }catch(e){$camSt.textContent='ERRORE FOTOCAMERA: '+e.message;$camSt.className='st warn'}
+  }catch(e){
+    $camSt.textContent='ERRORE FOTOCAMERA: '+e.message;
+    $camSt.className='st warn';
+  }
 }
 function stopCamera(){
   if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
 }
 
-// ═══════════ SHOOT ═══════════
+// ══════════════════════════════════════
+//  ① SCATTA
+// ══════════════════════════════════════
 function onShoot(){
-  // Cattura il frame corrente
   const vw=$video.videoWidth, vh=$video.videoHeight;
+  if(!vw||!vh) return;
   $capCanvas.width=vw; $capCanvas.height=vh;
   $capCanvas.getContext('2d').drawImage($video,0,0);
-  frozenDataUrl=$capCanvas.toDataURL('image/jpeg',0.95);
 
-  // Passa ad adjust screen
-  $camScr.classList.add('hide');
+  // Salva la foto intera
+  const full=document.createElement('canvas');
+  full.width=vw; full.height=vh;
+  full.getContext('2d').drawImage($capCanvas,0,0);
+  data[step].fullCanvas=full;
+
+  // Mostra adjust screen
+  hideAll();
   $adjScr.classList.remove('hide');
+  $adjTag.textContent=step==='front'?'AGGIUSTA BORDI — FRONTE':'AGGIUSTA BORDI — RETRO';
 
   $frozenImg.onload=()=>{
     resizeAdjOverlay();
-    detectOnFrozen();
+    // Recupera corners salvati (da modifica) o rileva
+    if(data[step].corners){
+      corners=data[step].corners;
+      drawAdj(null);
+      $adjSt.textContent='TRASCINA GLI ANGOLI PER MODIFICARE';
+      $adjSt.className='st ok';
+    }else{
+      detectOnFrozen();
+    }
     bindAdjTouch();
   };
-  $frozenImg.src=frozenDataUrl;
+  $frozenImg.src=$capCanvas.toDataURL('image/jpeg',0.95);
 }
 
 function onRetry(){
-  // Torna alla camera
-  $adjScr.classList.add('hide');
+  hideAll();
   $camScr.classList.remove('hide');
   if(!stream) startCamera();
 }
 
-// ═══════════ DETECT ON FROZEN IMAGE ═══════════
+// ══════════════════════════════════════
+//  DETECT SUL FERMO IMMAGINE
+// ══════════════════════════════════════
 function detectOnFrozen(){
-  // Lavora sul canvas della foto catturata (piena risoluzione)
-  const vw=$capCanvas.width, vh=$capCanvas.height;
-  // Scala per velocità
+  const iw=$capCanvas.width, ih=$capCanvas.height;
   const SC=0.6;
-  const sw=Math.round(vw*SC), sh=Math.round(vh*SC);
+  const sw=Math.round(iw*SC), sh=Math.round(ih*SC);
 
   let src=null,small=null,gray=null,blur=null;
   let bestPts=null,bestArea=0;
@@ -256,13 +313,12 @@ function detectOnFrozen(){
     cv.cvtColor(small,gray,cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray,blur,new cv.Size(5,5),0);
 
-    // Multi-pass Canny
-    for(const [lo,hi] of [[8,32],[20,70],[45,130],[75,200]]){
+    for(const[lo,hi]of[[8,32],[20,70],[45,130],[75,200]]){
       const edges=new cv.Mat();
       cv.Canny(blur,edges,lo,hi);
       const k3=cv.Mat.ones(3,3,cv.CV_8U);
-      cv.dilate(edges,edges,k3);
       const k5=cv.Mat.ones(5,5,cv.CV_8U);
+      cv.dilate(edges,edges,k3);
       cv.morphologyEx(edges,edges,cv.MORPH_CLOSE,k5);
       k3.delete(); k5.delete();
 
@@ -278,163 +334,154 @@ function detectOnFrozen(){
         cv.convexHull(cnt,hull);
         const hArea=cv.contourArea(hull);
         const peri=cv.arcLength(hull,true);
-        for(const eps of [0.01,0.015,0.02,0.03,0.05,0.08]){
+        for(const eps of[0.01,0.015,0.02,0.03,0.05,0.08]){
           const ap=new cv.Mat();
           cv.approxPolyDP(hull,ap,eps*peri,true);
           if(ap.rows===4){
             const pts=[];
             for(let j=0;j<4;j++)
               pts.push({x:ap.data32S[j*2]/SC, y:ap.data32S[j*2+1]/SC});
-            const [tl,tr,br,bl]=orderPts(pts);
+            const[tl,tr,br,bl]=orderPts(pts);
             const w=Math.hypot(tr.x-tl.x,tr.y-tl.y);
             const h=Math.hypot(bl.x-tl.x,bl.y-tl.y);
             const ratio=Math.max(w,h)/(Math.min(w,h)||1);
-            if(ratio>=1.1&&ratio<=3.5&&hArea>bestArea){
-              bestPts=pts; bestArea=hArea;
-            }
+            if(ratio>=1.1&&ratio<=3.5&&hArea>bestArea){bestPts=pts;bestArea=hArea}
           }
           ap.delete();
-          if(bestPts&&bestArea>sw*sh*0.06) break;
+          if(bestPts&&bestArea>sw*sh*0.06)break;
         }
         hull.delete(); cnt.delete();
       }
       ctrs.delete(); hier.delete(); edges.delete();
-      if(bestPts&&bestArea>sw*sh*0.06) break;
+      if(bestPts&&bestArea>sw*sh*0.06)break;
     }
   }catch(e){console.error('CV:',e)}
   finally{[src,small,gray,blur].forEach(m=>{try{if(m)m.delete()}catch(_){}})}
 
-  // Converti coordinate immagine → coordinate display sull'img element
-  const rect=$frozenImg.getBoundingClientRect();
-  const iw=$capCanvas.width, ih=$capCanvas.height;
-  const dw=rect.width, dh=rect.height;
-
-  // object-fit:contain → calcola offset letterbox
-  const imgRatio=iw/ih, dispRatio=dw/dh;
-  let renderW,renderH,offX,offY;
-  if(imgRatio>dispRatio){
-    renderW=dw; renderH=dw/imgRatio;
-    offX=0; offY=(dh-renderH)/2;
-  }else{
-    renderH=dh; renderW=dh*imgRatio;
-    offX=(dw-renderW)/2; offY=0;
-  }
-
-  const scaleToDisp = pt => ({
-    x: pt.x*(renderW/iw)+offX,
-    y: pt.y*(renderH/ih)+offY
+  // Converti in coordinate display
+  const{renderW,renderH,offX,offY}=getLetterbox();
+  const scaleD=pt=>({
+    x:pt.x*(renderW/iw)+offX,
+    y:pt.y*(renderH/ih)+offY
   });
 
   if(bestPts){
-    corners=orderPts(bestPts).map(scaleToDisp);
-    $adjSt.textContent='BORDI RILEVATI — TRASCINA PER AGGIUSTARE';
+    corners=orderPts(bestPts).map(scaleD);
+    $adjSt.textContent='BORDI RILEVATI — TRASCINA GLI ANGOLI PER AGGIUSTARE';
     $adjSt.className='st ok';
   }else{
-    // Fallback: rettangolo al 70% centrato
-    const px=dw*0.12, py=dh*0.15;
-    corners=[
-      {x:px,      y:py},
-      {x:dw-px,   y:py},
-      {x:dw-px,   y:dh-py},
-      {x:px,      y:dh-py}
-    ];
-    $adjSt.textContent='BORDI NON RILEVATI — TRASCINA GLI ANGOLI';
+    const dw=$adjOv.width, dh=$adjOv.height;
+    const px=dw*0.10, py=dh*0.15;
+    corners=[{x:px,y:py},{x:dw-px,y:py},{x:dw-px,y:dh-py},{x:px,y:dh-py}];
+    $adjSt.textContent='BORDI NON TROVATI — TRASCINA GLI ANGOLI MANUALMENTE';
     $adjSt.className='st warn';
   }
-
   drawAdj(null);
 }
 
-// ═══════════ ADJUST OVERLAY ═══════════
+// ══════════════════════════════════════
+//  LETTERBOX helper
+// ══════════════════════════════════════
+function getLetterbox(){
+  const iw=$capCanvas.width, ih=$capCanvas.height;
+  const dw=$adjOv.width,     dh=$adjOv.height;
+  const imgR=iw/ih, dspR=dw/dh;
+  let renderW,renderH,offX,offY;
+  if(imgR>dspR){renderW=dw;renderH=dw/imgR;offX=0;offY=(dh-renderH)/2}
+  else{renderH=dh;renderW=dh*imgR;offX=(dw-renderW)/2;offY=0}
+  return{renderW,renderH,offX,offY,iw,ih,dw,dh}
+}
+
+// ══════════════════════════════════════
+//  ADJUST OVERLAY — resize & touch
+// ══════════════════════════════════════
 function resizeAdjOverlay(){
   const r=$adjWrap.getBoundingClientRect();
-  $adjOv.width=r.width;
-  $adjOv.height=r.height;
+  $adjOv.width=r.width; $adjOv.height=r.height;
 }
 
+let _touchBound=false;
 function bindAdjTouch(){
-  // Rimuovi listener precedenti ricreando il canvas
-  $adjOv.removeEventListener('touchstart',onTS);
-  $adjOv.removeEventListener('touchmove', onTM);
-  $adjOv.removeEventListener('touchend',  onTE);
-  $adjOv.removeEventListener('mousedown', onMD);
-  window.removeEventListener('mousemove', onMM);
-  window.removeEventListener('mouseup',   onMU);
-
-  $adjOv.addEventListener('touchstart', onTS,{passive:false});
-  $adjOv.addEventListener('touchmove',  onTM,{passive:false});
-  $adjOv.addEventListener('touchend',   onTE,{passive:false});
-  $adjOv.addEventListener('mousedown',  onMD);
-  window.addEventListener('mousemove',  onMM);
-  window.addEventListener('mouseup',    onMU);
+  if(_touchBound) return; _touchBound=true;
+  $adjOv.addEventListener('touchstart',onTS,{passive:false});
+  $adjOv.addEventListener('touchmove', onTM,{passive:false});
+  $adjOv.addEventListener('touchend',  onTE,{passive:false});
+  $adjOv.addEventListener('mousedown', onMD);
+  window.addEventListener('mousemove', onMM);
+  window.addEventListener('mouseup',   onMU);
 }
 
-function ptFromTouch(e){
-  const r=$adjOv.getBoundingClientRect();
-  return{x:e.changedTouches[0].clientX-r.left, y:e.changedTouches[0].clientY-r.top};
-}
-function ptFromMouse(e){
-  const r=$adjOv.getBoundingClientRect();
-  return{x:e.clientX-r.left, y:e.clientY-r.top};
-}
+const ptT=e=>{const r=$adjOv.getBoundingClientRect();return{x:e.changedTouches[0].clientX-r.left,y:e.changedTouches[0].clientY-r.top}}
+const ptM=e=>{const r=$adjOv.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top}}
 
 function nearCorner(pos){
   if(!corners)return -1;
   let best=-1,bestD=Infinity;
   corners.forEach((c,i)=>{
     const d=Math.hypot(c.x-pos.x,c.y-pos.y);
-    if(d<HIT_R*2&&d<bestD){best=i;bestD=d}
+    if(d<HIT_R*2.2&&d<bestD){best=i;bestD=d}
   });
   return best;
 }
-
-function onTS(e){e.preventDefault();const p=ptFromTouch(e);const i=nearCorner(p);if(i<0)return;dragIdx=i;dragOffX=corners[i].x-p.x;dragOffY=corners[i].y-p.y}
-function onTM(e){e.preventDefault();if(dragIdx<0)return;const p=ptFromTouch(e);moveDrag(p)}
+function onTS(e){e.preventDefault();const p=ptT(e);const i=nearCorner(p);if(i<0)return;dragIdx=i;dragOffX=corners[i].x-p.x;dragOffY=corners[i].y-p.y}
+function onTM(e){e.preventDefault();if(dragIdx<0)return;moveDrag(ptT(e))}
 function onTE(e){e.preventDefault();dragIdx=-1;drawAdj(null)}
-function onMD(e){const p=ptFromMouse(e);const i=nearCorner(p);if(i<0)return;dragIdx=i;dragOffX=corners[i].x-p.x;dragOffY=corners[i].y-p.y}
-function onMM(e){if(dragIdx<0)return;moveDrag(ptFromMouse(e))}
+function onMD(e){const p=ptM(e);const i=nearCorner(p);if(i<0)return;dragIdx=i;dragOffX=corners[i].x-p.x;dragOffY=corners[i].y-p.y}
+function onMM(e){if(dragIdx<0)return;moveDrag(ptM(e))}
 function onMU(){dragIdx=-1;drawAdj(null)}
 
 function moveDrag(pos){
-  const W=$adjOv.width, H=$adjOv.height;
+  const W=$adjOv.width,H=$adjOv.height;
   corners[dragIdx].x=Math.max(0,Math.min(W,pos.x+dragOffX));
   corners[dragIdx].y=Math.max(0,Math.min(H,pos.y+dragOffY));
   drawAdj(pos);
 }
 
-// ═══════════ DRAW ADJUST ═══════════
+// ══════════════════════════════════════
+//  DRAW ADJUST
+// ══════════════════════════════════════
 function drawAdj(loupePos){
-  const W=$adjOv.width, H=$adjOv.height;
+  const W=$adjOv.width,H=$adjOv.height;
   adjCtx.clearRect(0,0,W,H);
   if(!corners)return;
 
   const col='#3df5c1';
-  const fill='rgba(61,245,193,0.09)';
 
-  // Poligono
+  // Oscura zona fuori dal poligono
+  adjCtx.save();
+  adjCtx.fillStyle='rgba(0,0,0,0.45)';
+  adjCtx.fillRect(0,0,W,H);
   adjCtx.beginPath();
   adjCtx.moveTo(corners[0].x,corners[0].y);
   for(let i=1;i<4;i++) adjCtx.lineTo(corners[i].x,corners[i].y);
   adjCtx.closePath();
-  adjCtx.fillStyle=fill; adjCtx.fill();
+  adjCtx.globalCompositeOperation='destination-out';
+  adjCtx.fill();
+  adjCtx.restore();
+
+  // Bordo poligono
+  adjCtx.beginPath();
+  adjCtx.moveTo(corners[0].x,corners[0].y);
+  for(let i=1;i<4;i++) adjCtx.lineTo(corners[i].x,corners[i].y);
+  adjCtx.closePath();
   adjCtx.strokeStyle=col; adjCtx.lineWidth=2; adjCtx.setLineDash([]); adjCtx.stroke();
 
-  // Handles
+  // Handles angoli
   corners.forEach((p,i)=>{
     const active=(i===dragIdx);
+    // Cerchio esterno
     adjCtx.beginPath();
     adjCtx.arc(p.x,p.y,active?22:16,0,Math.PI*2);
     adjCtx.fillStyle=active?col:'rgba(255,255,255,0.2)';
     adjCtx.fill();
-    adjCtx.strokeStyle='#fff'; adjCtx.lineWidth=2; adjCtx.stroke();
+    adjCtx.strokeStyle='#fff'; adjCtx.lineWidth=2.5; adjCtx.stroke();
+    // Dot centrale
     adjCtx.beginPath();
     adjCtx.arc(p.x,p.y,4,0,Math.PI*2);
     adjCtx.fillStyle=active?'#000':col; adjCtx.fill();
-
     // Bracket
-    const nx=corners[(i+1)%4], px2=corners[(i+3)%4];
-    const dn=n2(nx.x-p.x,nx.y-p.y), dp=n2(px2.x-p.x,px2.y-p.y);
-    const L=16;
+    const nx=corners[(i+1)%4],px2=corners[(i+3)%4];
+    const dn=n2(nx.x-p.x,nx.y-p.y),dp=n2(px2.x-p.x,px2.y-p.y),L=18;
     adjCtx.beginPath();
     adjCtx.moveTo(p.x+dn.x*L,p.y+dn.y*L);
     adjCtx.lineTo(p.x,p.y);
@@ -444,43 +491,30 @@ function drawAdj(loupePos){
 
   // ── LENTE ──
   if(dragIdx>=0&&loupePos){
-    const cx=corners[dragIdx].x, cy=corners[dragIdx].y;
-    let lx=cx, ly=cy-LOUPE_R*2.4;
-    if(ly<LOUPE_R+8) ly=cy+LOUPE_R*2.4;
+    const cx=corners[dragIdx].x,cy=corners[dragIdx].y;
+    let lx=cx,ly=cy-LOUPE_R*2.5;
+    if(ly<LOUPE_R+8)ly=cy+LOUPE_R*2.5;
     lx=Math.max(LOUPE_R+4,Math.min(W-LOUPE_R-4,lx));
     ly=Math.max(LOUPE_R+4,Math.min(H-LOUPE_R-4,ly));
 
     // Linea tratteggiata
     adjCtx.beginPath(); adjCtx.moveTo(cx,cy); adjCtx.lineTo(lx,ly);
-    adjCtx.strokeStyle='rgba(255,255,255,.3)'; adjCtx.lineWidth=1.5;
+    adjCtx.strokeStyle='rgba(255,255,255,.35)'; adjCtx.lineWidth=1.5;
     adjCtx.setLineDash([5,5]); adjCtx.stroke(); adjCtx.setLineDash([]);
 
-    // Sorgente zoom: l'immagine congelata già mostrata
-    // Usa il frozenImg come sorgente per disegnare la lente
-    const iRect=$frozenImg.getBoundingClientRect();
-    const oRect=$adjOv.getBoundingClientRect();
-    // Offset dell'img rispetto all'overlay (coincidono perché absolute inset:0)
-    const iw=$capCanvas.width, ih=$capCanvas.height;
-    const dispW=$adjOv.width, dispH=$adjOv.height;
-
-    // Coordinate del punto in pixel immagine originale
-    const imgRatio=iw/ih, dispRatio=dispW/dispH;
-    let renderW,renderH,offX,offY;
-    if(imgRatio>dispRatio){
-      renderW=dispW; renderH=dispW/imgRatio; offX=0; offY=(dispH-renderH)/2;
-    }else{
-      renderH=dispH; renderW=dispH*imgRatio; offX=(dispW-renderW)/2; offY=0;
-    }
-    const imgX=(cx-offX)/(renderW/iw);
-    const imgY=(cy-offY)/(renderH/ih);
+    // Zoom dal canvas originale
+    const{renderW,renderH,offX,offY,iw,ih}=getLetterbox();
+    const imgX=(cx-offX)*(iw/renderW);
+    const imgY=(cy-offY)*(ih/renderH);
     const srcR=(LOUPE_R/LOUPE_Z)*(iw/renderW);
 
     adjCtx.save();
     adjCtx.beginPath(); adjCtx.arc(lx,ly,LOUPE_R,0,Math.PI*2); adjCtx.clip();
-    adjCtx.fillStyle='#000'; adjCtx.fillRect(lx-LOUPE_R,ly-LOUPE_R,LOUPE_R*2,LOUPE_R*2);
-    adjCtx.drawImage($capCanvas, imgX-srcR,imgY-srcR,srcR*2,srcR*2, lx-LOUPE_R,ly-LOUPE_R,LOUPE_R*2,LOUPE_R*2);
+    adjCtx.fillStyle='#111'; adjCtx.fillRect(lx-LOUPE_R,ly-LOUPE_R,LOUPE_R*2,LOUPE_R*2);
+    adjCtx.drawImage(data[step].fullCanvas||$capCanvas,imgX-srcR,imgY-srcR,srcR*2,srcR*2,lx-LOUPE_R,ly-LOUPE_R,LOUPE_R*2,LOUPE_R*2);
     adjCtx.restore();
 
+    // Bordi lente
     adjCtx.beginPath(); adjCtx.arc(lx,ly,LOUPE_R,0,Math.PI*2);
     adjCtx.strokeStyle='#fff'; adjCtx.lineWidth=3; adjCtx.stroke();
     adjCtx.beginPath(); adjCtx.arc(lx,ly,LOUPE_R-3,0,Math.PI*2);
@@ -494,46 +528,94 @@ function drawAdj(loupePos){
   }
 }
 
-// ═══════════ CONFIRM ═══════════
+// ══════════════════════════════════════
+//  ② CONFERMA RITAGLIO
+// ══════════════════════════════════════
 function onConfirm(){
-  // Converti corners display → coordinate pixel immagine originale
-  const iw=$capCanvas.width, ih=$capCanvas.height;
-  const dispW=$adjOv.width, dispH=$adjOv.height;
-  const imgRatio=iw/ih, dispRatio=dispW/dispH;
-  let renderW,renderH,offX,offY;
-  if(imgRatio>dispRatio){
-    renderW=dispW; renderH=dispW/imgRatio; offX=0; offY=(dispH-renderH)/2;
-  }else{
-    renderH=dispH; renderW=dispH*imgRatio; offX=(dispW-renderW)/2; offY=0;
-  }
-  const dispToImg=p=>({
-    x:(p.x-offX)*(iw/renderW),
-    y:(p.y-offY)*(ih/renderH)
-  });
-  const imagePts=corners.map(dispToImg);
-  const warped=perspectiveWarp($capCanvas, imagePts);
+  // Salva corners in coordinate IMMAGINE (per poter tornare a modificarli)
+  const{renderW,renderH,offX,offY,iw,ih}=getLetterbox();
+  const dispToImg=p=>({x:(p.x-offX)*(iw/renderW),y:(p.y-offY)*(ih/renderH)});
+  const imgPts=corners.map(dispToImg);
 
-  $adjScr.classList.add('hide');
+  // Salva corners display (per "MODIFICA RITAGLIO")
+  data[step].corners=[...corners.map(c=>({...c}))];
 
+  // Warp
+  const warped=perspectiveWarp(data[step].fullCanvas, imgPts);
+  data[step].croppedCanvas=warped;
+
+  // Aggiorna thumbnail
+  updateThumb(step==='front'?'tbFront':'tbBack', warped);
+
+  // Vai a preview
+  showPreview();
+}
+
+// ══════════════════════════════════════
+//  ③ PREVIEW
+// ══════════════════════════════════════
+function showPreview(){
+  hideAll();
+  $prevScr.classList.remove('hide');
+
+  const isFront=(step==='front');
+  $prevTag.textContent=isFront?'FRONTE ✓':'RETRO ✓';
+  $prevSt.textContent=isFront?'FRONTE SALVATO — CONTROLLA IL RITAGLIO':'RETRO SALVATO — CONTROLLA IL RITAGLIO';
+  $prevNext.textContent=isFront?'📷 SCATTA RETRO':'✓ GENERA IMMAGINE FINALE';
+
+  $prevImg.src=data[step].croppedCanvas.toDataURL('image/jpeg',0.95);
+}
+
+function onPreviewNext(){
   if(step==='front'){
-    frontCanvas=warped;
-    updateThumb('tbFront',warped);
+    // Passa al retro
     step='back';
     $camTag.textContent='PASSO 2 / 2';
     $shootBtn.textContent='📷 SCATTA RETRO';
     $camSt.textContent='ORA GIRA IL BIGLIETTO E SCATTA IL RETRO';
     $camSt.className='st warn';
+    hideAll();
     $camScr.classList.remove('hide');
     if(!stream) startCamera();
   }else{
-    backCanvas=warped;
-    updateThumb('tbBack',warped);
+    // Genera risultato finale
     stopCamera();
     buildResult();
   }
 }
 
-// ═══════════ PERSPECTIVE WARP ═══════════
+function onEditCrop(){
+  // Torna all'adjust screen con la foto del lato corrente
+  hideAll();
+  $adjScr.classList.remove('hide');
+  $adjTag.textContent=step==='front'?'MODIFICA RITAGLIO — FRONTE':'MODIFICA RITAGLIO — RETRO';
+
+  $frozenImg.onload=()=>{
+    resizeAdjOverlay();
+    // corners già salvati → ripristina
+    if(data[step].corners){
+      corners=[...data[step].corners.map(c=>({...c}))];
+      drawAdj(null);
+      $adjSt.textContent='TRASCINA GLI ANGOLI PER MODIFICARE';
+      $adjSt.className='st ok';
+    }else{
+      detectOnFrozen();
+    }
+  };
+  // Ricarica la foto originale intera
+  const full=data[step].fullCanvas;
+  const tmp=document.createElement('canvas');
+  tmp.width=full.width; tmp.height=full.height;
+  tmp.getContext('2d').drawImage(full,0,0);
+  // Sincronizza anche capCanvas per getLetterbox
+  $capCanvas.width=full.width; $capCanvas.height=full.height;
+  $capCanvas.getContext('2d').drawImage(full,0,0);
+  $frozenImg.src=tmp.toDataURL('image/jpeg',0.95);
+}
+
+// ══════════════════════════════════════
+//  PERSPECTIVE WARP
+// ══════════════════════════════════════
 function orderPts(pts){
   const tl=pts.reduce((a,b)=>a.x+a.y<b.x+b.y?a:b);
   const br=pts.reduce((a,b)=>a.x+a.y>b.x+b.y?a:b);
@@ -560,21 +642,26 @@ function perspectiveWarp(srcCanvas,rawPts){
   return out;
 }
 
-// ═══════════ RESULT ═══════════
+// ══════════════════════════════════════
+//  ④ RESULT
+// ══════════════════════════════════════
 function buildResult(){
+  hideAll();
   $resScr.classList.remove('hide');
   const PAD=24,GAP=14,LBLH=30;
-  const H=Math.max(frontCanvas.height,backCanvas.height);
-  const fw=Math.round(frontCanvas.width*H/frontCanvas.height);
-  const bw=Math.round(backCanvas.width*H/backCanvas.height);
+  const fc=data.front.croppedCanvas, bc=data.back.croppedCanvas;
+  const H=Math.max(fc.height,bc.height);
+  const fw=Math.round(fc.width*H/fc.height);
+  const bw=Math.round(bc.width*H/bc.height);
   const rc=$('resultCanvas');
   rc.width=PAD*2+fw+GAP+bw; rc.height=PAD*2+H+LBLH;
   const ctx=rc.getContext('2d');
   ctx.fillStyle='#0a0b10'; ctx.fillRect(0,0,rc.width,rc.height);
-  ctx.drawImage(frontCanvas,PAD,PAD,fw,H);
-  ctx.drawImage(backCanvas,PAD+fw+GAP,PAD,bw,H);
+  ctx.drawImage(fc,PAD,PAD,fw,H);
+  ctx.drawImage(bc,PAD+fw+GAP,PAD,bw,H);
   ctx.strokeStyle='#252635'; ctx.lineWidth=1;
-  ctx.strokeRect(PAD,PAD,fw,H); ctx.strokeRect(PAD+fw+GAP,PAD,bw,H);
+  ctx.strokeRect(PAD,PAD,fw,H);
+  ctx.strokeRect(PAD+fw+GAP,PAD,bw,H);
   ctx.fillStyle='#585a70'; ctx.font='11px "Courier New"'; ctx.textAlign='center';
   ctx.fillText('FRONTE',PAD+fw/2,PAD+H+20);
   ctx.fillText('RETRO',PAD+fw+GAP+bw/2,PAD+H+20);
@@ -588,17 +675,28 @@ function downloadResult(){
   a.download=`biglietto_${ts}.png`; a.href=rc.toDataURL('image/png'); a.click();
 }
 
+// ══════════════════════════════════════
+//  RESET
+// ══════════════════════════════════════
 function resetApp(){
-  frontCanvas=backCanvas=null; step='front'; dragIdx=-1;
-  $camTag.textContent='PASSO 1 / 2'; $shootBtn.textContent='📷 SCATTA FRONTE';
-  $camSt.textContent='INQUADRA IL BIGLIETTO E SCATTA'; $camSt.className='st';
+  data={front:{fullCanvas:null,corners:null,croppedCanvas:null},back:{fullCanvas:null,corners:null,croppedCanvas:null}};
+  step='front'; dragIdx=-1; corners=null;
+  $camTag.textContent='PASSO 1 / 2';
+  $shootBtn.textContent='📷 SCATTA FRONTE';
+  $camSt.textContent='INQUADRA IL BIGLIETTO E SCATTA';
+  $camSt.className='st';
   resetThumb('tbFront','FRONTE'); resetThumb('tbBack','RETRO');
-  $resScr.classList.add('hide'); $adjScr.classList.add('hide');
+  hideAll();
   $camScr.classList.remove('hide');
   startCamera();
 }
 
-// ═══════════ HELPERS ═══════════
+// ══════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════
+function hideAll(){
+  [$camScr,$adjScr,$prevScr,$resScr].forEach(s=>s.classList.add('hide'));
+}
 function updateThumb(id_,canvas){
   const el=document.getElementById(id_),img=new Image();
   img.src=canvas.toDataURL('image/jpeg',.8);
