@@ -317,6 +317,14 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 <script>
 'use strict';
 
+// ── Definite subito così sono disponibili anche se chiamate da script esterni ──
+function cvScriptLoaded() {
+  if (typeof cv === 'undefined') { setTimeout(cvScriptLoaded, 300); return; }
+  if (cv.getBuildInformation) { cvReady = true; }
+  else { cv.onRuntimeInitialized = () => { cvReady = true; }; }
+}
+function cvLoadError() { /* OpenCV non disponibile, app funziona senza */ }
+
 /* ═══════════════════════════════════════
    STATE
 ═══════════════════════════════════════ */
@@ -381,55 +389,38 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* ═══════════════════════════════════════
-   OPENCV INIT
+   OPENCV INIT + APP START
 ═══════════════════════════════════════ */
-function cvScriptLoaded() {
-  if (typeof cv === 'undefined') { setTimeout(cvScriptLoaded, 300); return; }
-  if (cv.getBuildInformation) { cvReady = true; document.getElementById('loadSpin').style.borderTopColor='var(--accent)'; }
-  else cv.onRuntimeInitialized = () => { cvReady = true; };
-}
-function cvLoadError() {
-  // OpenCV non disponibile - app funziona senza rilevamento automatico
-  cvReady = false;
-}
 
-// ── Avvia l'app subito senza aspettare OpenCV ──
+// Avvia l'app subito — OpenCV carica in background
 document.addEventListener('DOMContentLoaded', () => {
-  // Mostra il pulsante skip dopo 2 secondi
   setTimeout(() => {
     if (!cvReady) {
       document.getElementById('loadLbl').textContent = 'CARICAMENTO OPENCV...';
       document.getElementById('skipBtn').style.display = 'block';
     }
   }, 2000);
-  // Avvia comunque dopo 5 secondi anche senza OpenCV
-  setTimeout(() => { if (!document.getElementById('loading').classList.contains('hide')) forceStart(); }, 5000);
+  setTimeout(() => {
+    if (!document.getElementById('loading').classList.contains('hide')) forceStart();
+  }, 5000);
 });
 
 function forceStart() {
   document.getElementById('loading').classList.add('hide');
-  document.getElementById('scrCamera').classList.remove('hide');
+  showScreen('scrCamera');
   startCamera();
 }
 
+// Poll OpenCV ogni 500ms, avvia appena pronto
 let _p = 0;
 setTimeout(function poll() {
-  if (cvReady) {
-    // OpenCV pronto: avvia se ancora in loading
-    if (!document.getElementById('loading').classList.contains('hide')) forceStart();
-    return;
-  }
   if (typeof cv !== 'undefined' && (cv.getBuildInformation || cv.Mat)) {
     cvReady = true;
     if (!document.getElementById('loading').classList.contains('hide')) forceStart();
     return;
   }
   if (++_p < 30) setTimeout(poll, 500);
-}, 1000);
-
-function onCvReady() {
-  cvReady = true;
-}
+}, 500);
 
 /* ═══════════════════════════════════════
    SCREEN ROUTING
