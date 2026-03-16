@@ -302,7 +302,7 @@ let frontCanvas = null;
 let backCanvas  = null;
 let detectedPts = null;
 let stableCount = 0;
-const STABLE_THRESHOLD = 8;
+const STABLE_THRESHOLD = 4;
 
 // DOM refs
 const $loading    = document.getElementById('loading');
@@ -419,14 +419,24 @@ function processFrame() {
 
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.Canny(blur, edges, 50, 180);
+
+    // Canny con soglie basse per catturare anche biglietti a basso contrasto
+    cv.Canny(blur, edges, 20, 80);
+
+    // Soglia adattiva per bordi su sfondi chiari (bianco su legno)
+    const adapt = new cv.Mat();
+    cv.adaptiveThreshold(blur, adapt, 255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 3);
+    cv.bitwise_or(edges, adapt, edges);
+    adapt.delete();
 
     kernel = cv.Mat.ones(3, 3, cv.CV_8U);
     cv.dilate(edges, edges, kernel);
+    cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
 
     cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    const minArea = vw * vh * 0.04;
+    const minArea = vw * vh * 0.03;
     let bestPts = null, bestArea = 0;
 
     for (let i = 0; i < contours.size(); i++) {
