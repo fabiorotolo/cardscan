@@ -934,31 +934,39 @@ async function downloadResult() {
   const now = new Date();
   const ts  = [now.getFullYear(),p2(now.getMonth()+1),p2(now.getDate()),'_',p2(now.getHours()),p2(now.getMinutes())].join('');
   const filename = `biglietto_${ts}.png`;
-  const mode = settings.saveMode;
 
-  if (mode === 'share') {
-    try {
-      const blob = await new Promise(res => $resultCanvas.toBlob(res,'image/png'));
-      const file = new File([blob], filename, {type:'image/png'});
-      if (navigator.canShare && navigator.canShare({files:[file]})) {
-        await navigator.share({files:[file], title:'Biglietto da visita'});
-        return;
-      }
-    } catch(e) { if(e.name==='AbortError') return; }
-  }
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
-  if (mode === 'download') {
-    const a = document.createElement('a');
+  if (!isIOS) {
+    // Android / desktop → download diretto nella cartella Download
+    const blob = await new Promise(res => $resultCanvas.toBlob(res, 'image/png'));
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
     a.download = filename;
-    a.href = $resultCanvas.toDataURL('image/png');
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); document.body.removeChild(a); }, 1000);
     return;
   }
 
-  // Default: overlay (iOS)
-  const blob = await new Promise(res => $resultCanvas.toBlob(res,'image/png'));
-  const url  = URL.createObjectURL(blob);
-  showSaveInstructions(url, filename);
+  // iOS: non esiste accesso diretto alla cartella Download dal browser.
+  // Usiamo Web Share API → l'utente sceglie "Salva in File" → cartella Download
+  try {
+    const blob = await new Promise(res => $resultCanvas.toBlob(res, 'image/png'));
+    const file = new File([blob], filename, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    }
+  } catch(e) {
+    if (e.name === 'AbortError') return; // utente ha annullato
+  }
+
+  // Fallback iOS: mostra immagine → tieni premuto → Salva
+  const blob2 = await new Promise(res => $resultCanvas.toBlob(res, 'image/png'));
+  const url2  = URL.createObjectURL(blob2);
+  showSaveInstructions(url2, filename);
 }
 
 function showSaveInstructions(url, filename) {
