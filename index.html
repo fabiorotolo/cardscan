@@ -128,6 +128,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
     <div style="display:flex;gap:10px;align-items:center">
       <div class="tag" id="camTag">PASSO 1 / 2</div>
       <button onclick="openSettings()" style="background:none;border:none;cursor:pointer;padding:4px;color:var(--dim);font-size:18px;-webkit-tap-highlight-color:transparent" title="Impostazioni">⚙️</button>
+      <button onclick="showArchive()" style="background:none;border:none;cursor:pointer;padding:4px;color:var(--dim);font-size:18px;-webkit-tap-highlight-color:transparent" title="Archivio">📋</button>
     </div>
   </div>
   <div class="cam-area" id="camArea">
@@ -220,7 +221,52 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   <div class="panel">
     <div class="st ok">FRONTE + RETRO PRONTI</div>
     <button class="btn" onclick="downloadResult()">💾 SALVA IN PNG</button>
+    <button class="btn" style="border-color:#a78bfa;color:#a78bfa" onclick="analyzeWithAI()">🤖 ANALIZZA CON AI</button>
     <button class="btn sec" onclick="resetApp()">🔄 NUOVA SCANSIONE</button>
+  </div>
+</div>
+
+<!-- ⑤ AI ANALYSIS SCREEN -->
+<div id="scrAI" class="screen hide">
+  <div class="hdr">
+    <div class="hdr-logo">CARDSCAN</div>
+    <div class="tag" id="aiTag" style="color:#a78bfa;border-color:#a78bfa">AI ANALISI</div>
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:16px;background:var(--surf2)">
+    <!-- Stato loading -->
+    <div id="aiLoading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;gap:16px">
+      <div class="spin"></div>
+      <div style="font-size:11px;letter-spacing:3px;color:var(--dim)">CLAUDE STA LEGGENDO IL BIGLIETTO...</div>
+    </div>
+    <!-- Miniatura biglietto -->
+    <div id="aiCardThumb" style="display:none;margin-bottom:16px;text-align:center">
+      <img id="aiThumbImg" style="max-height:100px;max-width:100%;border:1px solid var(--border)">
+    </div>
+    <!-- Campi compilati -->
+    <div id="aiFields" style="display:none;display:flex;flex-direction:column;gap:10px"></div>
+  </div>
+  <div class="panel">
+    <div class="st" id="aiSt"></div>
+    <button class="btn" id="aiSaveBtn" style="display:none;border-color:#a78bfa;color:#a78bfa" onclick="saveContact()">💾 SALVA IN ARCHIVIO</button>
+    <button class="btn sec" onclick="showScreen('scrResult')">← TORNA AL BIGLIETTO</button>
+  </div>
+</div>
+
+<!-- ⑥ ARCHIVE SCREEN -->
+<div id="scrArchive" class="screen hide">
+  <div class="hdr">
+    <div class="hdr-logo" style="font-size:13px">ARCHIVIO</div>
+    <button onclick="showScreen('scrCamera')" style="background:none;border:none;color:var(--dim);font-family:var(--font);font-size:11px;letter-spacing:2px;cursor:pointer">← TORNA</button>
+  </div>
+  <div style="flex-shrink:0;padding:12px 18px;background:var(--surf);border-bottom:1px solid var(--border)">
+    <input id="archiveSearch" type="text" placeholder="CERCA NOME / AZIENDA / SETTORE..."
+      oninput="renderArchive()"
+      style="width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);
+        color:var(--text);font-family:var(--font);font-size:11px;letter-spacing:1px;outline:none">
+  </div>
+  <div id="archiveList" style="flex:1;overflow-y:auto;padding:12px 18px;background:var(--surf2)"></div>
+  <div class="panel">
+    <div class="st" id="archiveSt"></div>
   </div>
 </div>
 
@@ -359,7 +405,7 @@ function onCvReady() {
    SCREEN ROUTING
 ═══════════════════════════════════════ */
 function showScreen(id) {
-  ['scrCamera','scrAdjust','scrPreview','scrResult'].forEach(s => {
+  ['scrCamera','scrAdjust','scrPreview','scrResult','scrAI','scrArchive'].forEach(s => {
     document.getElementById(s).classList.toggle('hide', s !== id);
   });
 }
@@ -1148,7 +1194,240 @@ function resetThumb(id,lbl){
   el.innerHTML=`<span class="ph">${lbl}</span>`; el.classList.remove('done');
 }
 function n2(x,y){const d=Math.sqrt(x*x+y*y)||1;return{x:x/d,y:y/d};}
+
+/* ═══════════════════════════════════════
+   AI ANALYSIS
+═══════════════════════════════════════ */
+let currentContact = null; // contatto corrente da salvare
+
+const AI_FIELDS = [
+  { key:'nome',     label:'NOME',              icon:'👤' },
+  { key:'azienda',  label:'AZIENDA',           icon:'🏢' },
+  { key:'ruolo',    label:'RUOLO / QUALIFICA',  icon:'💼' },
+  { key:'settore',  label:'SETTORE',            icon:'🔧' },
+  { key:'indirizzo',label:'INDIRIZZO',          icon:'📍' },
+  { key:'telefono', label:'TELEFONO',           icon:'📞' },
+  { key:'email',    label:'EMAIL',              icon:'✉️' },
+  { key:'sito',     label:'SITO WEB',           icon:'🌐' },
+  { key:'note',     label:'NOTE',               icon:'📝' },
+];
+
+async function analyzeWithAI() {
+  showScreen('scrAI');
+  document.getElementById('aiLoading').style.display = 'flex';
+  document.getElementById('aiFields').style.display  = 'none';
+  document.getElementById('aiCardThumb').style.display = 'none';
+  document.getElementById('aiSaveBtn').style.display = 'none';
+  document.getElementById('aiSt').textContent = '';
+  currentContact = null;
+
+  // Mostra miniatura
+  const thumbUrl = $resultCanvas.toDataURL('image/jpeg', 0.7);
+  document.getElementById('aiThumbImg').src = thumbUrl;
+
+  // Prendi solo il fronte (o l'intera immagine se solo fronte)
+  const imgCanvas = cards.front.cropped || $resultCanvas;
+  const b64 = imgCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/jpeg', data: b64 }
+            },
+            {
+              type: 'text',
+              text: `Analizza questo biglietto da visita ed estrai tutte le informazioni presenti. 
+Rispondi SOLO con un oggetto JSON valido, nessun testo aggiuntivo, nessun markdown.
+Usa esattamente queste chiavi (stringa vuota se non trovato):
+{
+  "nome": "Nome Cognome completo",
+  "azienda": "Nome azienda",
+  "ruolo": "Ruolo o qualifica",
+  "settore": "Settore merceologico dedotto dal biglietto (es: Metalmeccanica, Informatica, Commercio, ecc.)",
+  "indirizzo": "Indirizzo completo",
+  "telefono": "Tutti i numeri di telefono",
+  "email": "Indirizzo email",
+  "sito": "Sito web",
+  "note": "Altre informazioni rilevanti sul biglietto"
+}`
+            }
+          ]
+        }]
+      })
+    });
+
+    const data = await resp.json();
+    const text = data.content?.[0]?.text || '';
+    const clean = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+
+    currentContact = {
+      ...parsed,
+      id: Date.now(),
+      imgFront: cards.front.cropped?.toDataURL('image/jpeg', 0.6) || '',
+      imgResult: $resultCanvas.toDataURL('image/jpeg', 0.6),
+      savedAt: new Date().toLocaleDateString('it-IT')
+    };
+
+    // Renderizza i campi editabili
+    renderAIFields(currentContact);
+    document.getElementById('aiLoading').style.display = 'none';
+    document.getElementById('aiFields').style.display  = 'flex';
+    document.getElementById('aiCardThumb').style.display = 'block';
+    document.getElementById('aiSaveBtn').style.display = 'block';
+    setSt(document.getElementById('aiSt'), 'MODIFICA I CAMPI SE NECESSARIO, POI SALVA', 'ok');
+
+  } catch(e) {
+    console.error('AI error:', e);
+    document.getElementById('aiLoading').style.display = 'none';
+    setSt(document.getElementById('aiSt'), 'ERRORE ANALISI — RIPROVA', 'warn');
+  }
+}
+
+function renderAIFields(contact) {
+  const container = document.getElementById('aiFields');
+  container.innerHTML = '';
+  container.style.display = 'flex';
+  container.style.flexDirection = 'column';
+  container.style.gap = '8px';
+
+  AI_FIELDS.forEach(f => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'background:var(--surf);border:1px solid var(--border);padding:10px 12px';
+    wrap.innerHTML = `
+      <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">${f.icon} ${f.label}</div>
+      <input data-key="${f.key}" value="${(contact[f.key]||'').replace(/"/g,'&quot;')}"
+        style="width:100%;background:transparent;border:none;outline:none;
+          color:var(--text);font-family:'Courier New';font-size:12px;letter-spacing:1px"
+        oninput="if(currentContact)currentContact['${f.key}']=this.value">`;
+    container.appendChild(wrap);
+  });
+}
+
+/* ═══════════════════════════════════════
+   ARCHIVE
+═══════════════════════════════════════ */
+function loadArchive() {
+  try { return JSON.parse(localStorage.getItem('cardscan_archive') || '[]'); } catch(_){ return []; }
+}
+function saveArchive(arr) {
+  try { localStorage.setItem('cardscan_archive', JSON.stringify(arr)); } catch(_){}
+}
+
+function saveContact() {
+  if (!currentContact) return;
+  // Aggiorna valori dai campi editati
+  document.querySelectorAll('#aiFields input[data-key]').forEach(inp => {
+    currentContact[inp.dataset.key] = inp.value;
+  });
+  const archive = loadArchive();
+  // Aggiorna se esiste già (stesso id), altrimenti aggiungi
+  const idx = archive.findIndex(c => c.id === currentContact.id);
+  if (idx >= 0) archive[idx] = currentContact;
+  else archive.unshift(currentContact);
+  saveArchive(archive);
+  showToast('✓ SALVATO IN ARCHIVIO');
+  document.getElementById('aiSaveBtn').textContent = '✓ SALVATO';
+  document.getElementById('aiSaveBtn').style.opacity = '0.5';
+}
+
+function showArchive() {
+  showScreen('scrArchive');
+  renderArchive();
+}
+
+function renderArchive() {
+  const q = (document.getElementById('archiveSearch')?.value || '').toLowerCase();
+  const archive = loadArchive();
+  const list = document.getElementById('archiveList');
+  const st   = document.getElementById('archiveSt');
+
+  const filtered = q
+    ? archive.filter(c =>
+        (c.nome||'').toLowerCase().includes(q) ||
+        (c.azienda||'').toLowerCase().includes(q) ||
+        (c.settore||'').toLowerCase().includes(q) ||
+        (c.email||'').toLowerCase().includes(q))
+    : archive;
+
+  if (!filtered.length) {
+    list.innerHTML = `<div style="text-align:center;color:var(--dim);font-size:11px;
+      letter-spacing:2px;padding:40px 0">${archive.length ? 'NESSUN RISULTATO' : 'ARCHIVIO VUOTO'}</div>`;
+    setSt(st, archive.length + ' CONTATTI TOTALI', '');
+    return;
+  }
+
+  setSt(st, filtered.length + ' / ' + archive.length + ' CONTATTI', 'ok');
+
+  list.innerHTML = filtered.map(c => `
+    <div style="background:var(--surf);border:1px solid var(--border);
+      margin-bottom:10px;padding:12px 14px;cursor:pointer"
+      onclick="showContactDetail(${c.id})">
+      <div style="display:flex;gap:12px;align-items:flex-start">
+        ${c.imgFront ? `<img src="${c.imgFront}" style="width:60px;height:36px;object-fit:cover;border:1px solid var(--border);flex-shrink:0">` : ''}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;color:var(--text);font-family:'Courier New';margin-bottom:2px;
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.nome||'—'}</div>
+          <div style="font-size:11px;color:var(--accent);letter-spacing:1px;margin-bottom:2px">${c.azienda||''}</div>
+          <div style="font-size:10px;color:var(--dim);letter-spacing:1px">${c.settore||''} ${c.settore&&c.savedAt?'·':''} ${c.savedAt||''}</div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function showContactDetail(id) {
+  const archive = loadArchive();
+  const c = archive.find(x => x.id === id);
+  if (!c) return;
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:600;background:var(--bg);' +
+    'display:flex;flex-direction:column;overflow-y:auto';
+
+  const fields = AI_FIELDS.map(f => c[f.key] ? `
+    <div style="padding:10px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:3px">${f.icon} ${f.label}</div>
+      <div style="font-size:13px;color:var(--text);font-family:'Courier New'">${c[f.key]}</div>
+    </div>` : '').join('');
+
+  overlay.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;
+      padding:14px 18px;background:var(--surf);border-bottom:1px solid var(--border);
+      padding-top:calc(14px + env(safe-area-inset-top,0px))">
+      <div style="font-size:14px;letter-spacing:4px;color:var(--accent)">${c.nome||'CONTATTO'}</div>
+      <button onclick="this.closest('div[style*=fixed]').remove()"
+        style="background:none;border:none;color:var(--dim);font-size:20px;cursor:pointer">✕</button>
+    </div>
+    ${c.imgResult ? `<div style="background:#000;text-align:center;padding:12px">
+      <img src="${c.imgResult}" style="max-width:100%;max-height:140px;object-fit:contain"></div>` : ''}
+    <div style="flex:1">${fields}</div>
+    <div style="padding:14px 18px;background:var(--surf);border-top:1px solid var(--border);
+      padding-bottom:max(14px,env(safe-area-inset-bottom,0px))">
+      <button onclick="deleteContact(${id});this.closest('div[style*=fixed]').remove()"
+        style="display:block;width:100%;padding:12px;background:transparent;
+        border:1px solid var(--warn);color:var(--warn);font-family:'Courier New';
+        font-size:11px;letter-spacing:3px;cursor:pointer">🗑 ELIMINA CONTATTO</button>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+function deleteContact(id) {
+  const archive = loadArchive().filter(c => c.id !== id);
+  saveArchive(archive);
+  renderArchive();
+  showToast('CONTATTO ELIMINATO');
+}
+
 function p2(n){return String(n).padStart(2,'0');}
-</script>
+
 </body>
 </html>
