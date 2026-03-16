@@ -162,11 +162,32 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
     <div class="hdr-logo">CARDSCAN</div>
     <div class="tag ok" id="prevTag">FRONTE ✓</div>
   </div>
-  <div class="cam-area">
+  <div class="cam-area" style="display:flex;flex-direction:row">
     <img id="previewImg" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain">
+    <!-- Barra contrasto verticale -->
+    <div style="position:absolute;right:10px;top:50%;transform:translateY(-50%);
+      display:flex;flex-direction:column;align-items:center;gap:8px;z-index:10">
+      <span style="font-size:9px;letter-spacing:1px;color:rgba(255,255,255,.6);writing-mode:horizontal-tb">+</span>
+      <div style="position:relative;width:36px;height:180px;
+        background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.2);
+        border-radius:18px;display:flex;align-items:center;justify-content:center">
+        <input type="range" id="contrastSlider" min="0" max="100" value="50"
+          oninput="onContrastChange(this.value)"
+          style="writing-mode:vertical-lr;direction:rtl;
+            -webkit-appearance:slider-vertical;appearance:slider-vertical;
+            width:180px;height:28px;
+            transform:rotate(180deg);
+            accent-color:#3df5c1;cursor:pointer;
+            position:absolute;margin:0;padding:0;
+            background:transparent;border:none;outline:none">
+      </div>
+      <span style="font-size:9px;letter-spacing:1px;color:rgba(255,255,255,.6)">-</span>
+      <div id="contrastVal" style="font-size:9px;letter-spacing:1px;color:#3df5c1;
+        background:rgba(0,0,0,.5);padding:3px 5px;border-radius:3px">50</div>
+    </div>
   </div>
   <div class="panel">
-    <div class="st ok" id="prevSt">FRONTE OK — CONTROLLA IL RITAGLIO</div>
+    <div class="st ok" id="prevSt">FRONTE OK — REGOLA CONTRASTO E CONFERMA</div>
     <button class="btn" id="prevNextBtn" onclick="onPreviewNext()">📷 SCATTA RETRO</button>
     <button class="btn sec" id="prevFinishBtn" onclick="onPreviewFinish()" style="display:none">✓ TERMINA SCANSIONE (SOLO FRONTE)</button>
     <button class="btn sec" onclick="onEditCrop()">✏️ MODIFICA RITAGLIO</button>
@@ -749,8 +770,11 @@ function onConfirm() {
   const imgPts=corners.map(p=>({x:(p.x-ox)*(iw/rw), y:(p.y-oy)*(ih/rh)}));
   cards[step].corners = corners.map(c=>({...c}));
   const warped = perspectiveWarp(cards[step].full, imgPts);
-  cards[step].cropped = settings.enhance ? autoEnhance(warped) : warped;
-  updateThumb(step==='front'?'tbFront':'tbBack', cards[step].cropped);
+  // Auto-enhance base
+  const enhanced = settings.enhance !== false ? autoEnhance(warped) : warped;
+  cards[step].cropped = enhanced;
+  cards[step].contrastLevel = 50; // reset al default
+  updateThumb(step==='front'?'tbFront':'tbBack', enhanced);
   showPreview();
 }
 
@@ -806,15 +830,69 @@ function showPreview() {
   const isFront = step==='front';
   $prevTag.textContent     = isFront ? 'FRONTE ✓' : 'RETRO ✓';
   $prevTag.className       = 'tag ok';
-  $prevSt.textContent      = isFront ? 'FRONTE OK — CONTROLLA IL RITAGLIO' : 'RETRO OK — CONTROLLA IL RITAGLIO';
+  $prevSt.textContent      = isFront ? 'FRONTE OK — REGOLA CONTRASTO E CONFERMA' : 'RETRO OK — REGOLA CONTRASTO E CONFERMA';
   $prevNextBtn.textContent = isFront ? '📷 SCATTA RETRO' : '✓ GENERA IMMAGINE FINALE';
-  // Mostra "Termina" solo al fronte
   document.getElementById('prevFinishBtn').style.display = isFront ? 'block' : 'none';
-  $prevImg.src = cards[step].cropped.toDataURL('image/jpeg',0.95);
+  // Reset slider a 50
+  const slider = document.getElementById('contrastSlider');
+  slider.value = 50;
+  document.getElementById('contrastVal').textContent = '50';
+  // Mostra immagine con contrasto neutro
+  $prevImg.src = cards[step].cropped.toDataURL('image/jpeg', 0.95);
+}
+
+// Applica contrasto in tempo reale all'anteprima
+function onContrastChange(val) {
+  document.getElementById('contrastVal').textContent = val;
+  const level = parseInt(val); // 0-100, default 50 = nessuna modifica
+  $prevImg.style.filter = `contrast(${contrastToCSS(level)}) brightness(${brightnessToCSS(level)})`;
+  // Salva il valore per usarlo al confirm
+  cards[step].contrastLevel = level;
+}
+
+// Mappa 0-100 → CSS contrast: 50=1.0, 0=0.5, 100=2.0
+function contrastToCSS(v) {
+  return (0.5 + v / 100 * 1.5).toFixed(2);
+}
+// Lieve luminosità inversa per non scurire troppo con alto contrasto
+function brightnessToCSS(v) {
+  if (v <= 50) return '1.00';
+  return (1 + (v - 50) / 100 * 0.15).toFixed(2);
+}
+
+function applyContrastToCanvas() {
+  const level = cards[step].contrastLevel ?? 50;
+  if (level === 50) return; // nessuna modifica necessaria
+  const src = cards[step].cropped;
+  const out = document.createElement('canvas');
+  out.width = src.width; out.height = src.height;
+  const ctx = out.getContext('2d');
+  ctx.filter = `contrast(${contrastToCSS(level)}) brightness(${brightnessToCSS(level)})`;
+  ctx.drawImage(src, 0, 0);
+  ctx.filter = 'none';
+  cards[step].cropped = out;
+  updateThumb(step==='front'?'tbFront':'tbBack', out);
+}
+
+function onPreviewNext() {
+  applyContrastToCanvas();
+  $prevImg.style.filter = 'none';
+  if (step==='front') {
+    step='back';
+    document.getElementById('camTag').textContent = 'PASSO 2 / 2';
+    document.getElementById('shootBtn').textContent = '📷 SCATTA RETRO';
+    setSt(document.getElementById('camSt'),'ORA GIRA IL BIGLIETTO E SCATTA IL RETRO','warn');
+    showScreen('scrCamera');
+    startCamera();
+  } else {
+    stopCamera();
+    buildResult();
+  }
 }
 
 function onPreviewFinish() {
-  // Esporta solo il fronte come PNG singolo
+  applyContrastToCanvas();
+  $prevImg.style.filter = 'none';
   stopCamera();
   const fc = cards.front.cropped;
   const PAD = 24, LBLH = 30;
@@ -830,23 +908,11 @@ function onPreviewFinish() {
   ctx.fillText('FRONTE', PAD + fc.width/2, PAD + fc.height + 20);
   showScreen('scrResult');
 }
-
-function onPreviewNext() {
-  if (step==='front') {
-    step='back';
-    document.getElementById('camTag').textContent = 'PASSO 2 / 2';
-    document.getElementById('shootBtn').textContent = '📷 SCATTA RETRO';
-    setSt(document.getElementById('camSt'),'ORA GIRA IL BIGLIETTO E SCATTA IL RETRO','warn');
-    showScreen('scrCamera');
-    startCamera();
-  } else {
-    stopCamera();
-    buildResult();
-  }
+  // Ricarica capCanvas con la foto intera e vai all'adjust
+  showAdjust(true);
 }
 
 function onEditCrop() {
-  // Ricarica capCanvas con la foto intera e vai all'adjust
   showAdjust(true);
 }
 
