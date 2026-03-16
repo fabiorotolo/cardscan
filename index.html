@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>CardScan</title>
-<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="cvScriptLoaded()"></script>
+<script async src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js" onload="cvScriptLoaded()" onerror="cvLoadError()"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -118,7 +118,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 <div id="loading">
   <div class="logo">CARD<span>SCAN</span></div>
   <div class="spin"></div>
-  <div class="lbl" id="loadLbl">CARICAMENTO OPENCV.JS...<br>ATTENDERE</div>
+  <div class="lbl" id="loadLbl">CARICAMENTO OPENCV.JS...<br><span style="font-size:9px;opacity:0.6">(può richiedere qualche secondo)</span></div>
 </div>
 
 <!-- ① CAMERA -->
@@ -385,12 +385,20 @@ function cvScriptLoaded() {
   if (cv.getBuildInformation) onCvReady();
   else cv.onRuntimeInitialized = onCvReady;
 }
+function cvLoadError() {
+  document.getElementById('loadLbl').innerHTML =
+    'ERRORE CARICAMENTO OPENCV<br>CONTROLLA LA CONNESSIONE<br><br>' +
+    '<button onclick="location.reload()" style="font-family:\'Courier New\';font-size:11px;' +
+    'letter-spacing:2px;padding:10px 20px;background:transparent;border:1px solid #3df5c1;' +
+    'color:#3df5c1;cursor:pointer">↺ RICARICA</button>';
+  document.querySelector('.spin').style.display = 'none';
+}
 let _p = 0;
 setTimeout(function poll() {
   if (cvReady) return;
   if (typeof cv !== 'undefined' && (cv.getBuildInformation || cv.Mat)) { onCvReady(); return; }
-  if (++_p < 80) setTimeout(poll, 500);
-  else document.getElementById('loadLbl').textContent = 'ERRORE CARICAMENTO\nRICARICA LA PAGINA';
+  if (++_p < 40) setTimeout(poll, 500); // max 20 secondi
+  else cvLoadError();
 }, 2000);
 
 function onCvReady() {
