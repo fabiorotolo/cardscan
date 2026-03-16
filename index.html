@@ -1509,10 +1509,14 @@ async function manualEnrich() {
     if (currentContact) currentContact[inp.dataset.key] = inp.value;
   });
 
+  const btn = document.getElementById('aiSearchBtn');
+
   if (!getApiKey()) {
-    setSt(document.getElementById('aiSt'), '⚙️ IMPOSTA LA CHIAVE API IN IMPOSTAZIONI PER CERCARE SUL WEB', 'warn');
+    setSt(document.getElementById('aiSt'), '⚙️ IMPOSTA LA CHIAVE API IN IMPOSTAZIONI ⚙️', 'warn');
     return;
   }
+
+  btn.textContent = '⏳ RICERCA IN CORSO...';
   btn.disabled = true;
   setSt(document.getElementById('aiSt'), 'RICERCA SUL WEB IN CORSO...', '');
 
