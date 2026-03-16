@@ -1562,70 +1562,114 @@ async function enrichContact(contact, forceOverwrite) {
     contact.sito = contact.email.split('@')[1] || '';
 
   const apiKey = getApiKey();
-  if (!apiKey) {
-    console.log('No API key — skipping web enrich');
-    return; // Nessuna chiave, salta silenziosamente
-  }
+  if (!apiKey) return;
 
   const query = [contact.azienda, contact.sito?.split('.')[0]]
     .filter(Boolean).join(' ').trim();
   if (!query) return;
 
-  console.log('Enriching with Claude:', query);
+  console.log('Enriching:', query);
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true'
+  };
+
+  const systemPrompt = 'Cerca informazioni su aziende italiane. Rispondi SOLO con JSON valido, nessun testo aggiuntivo.';
+  const userMsg = `Cerca sul web informazioni sull'azienda: "${query}"${contact.email ? ', sito: '+contact.email.split('@')[1] : ''}.
+Rispondi SOLO con questo JSON (stringa vuota se non trovato):
+{"descrizione":"attività azienda max 200 caratteri","settore":"settore merceologico","indirizzo":"indirizzo completo con CAP","telefono":"numero di telefono","sito":"dominio senza https://"}`;
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    // ── Turno 1: invia richiesta con tool web_search ──
+    const r1 = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
+      headers,
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 600,
+        max_tokens: 1000,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: 'Cerca informazioni aziendali e rispondi SOLO con JSON valido, nessun testo extra.',
-        messages: [{
-          role: 'user',
-          content: `Cerca informazioni sull'azienda: "${query}"${contact.email ? ' (sito: '+contact.email.split('@')[1]+')' : ''}.
-Rispondi SOLO con questo JSON (stringa vuota se non trovato):
-{"descrizione":"cosa fa l'azienda, max 200 caratteri","settore":"settore merceologico","indirizzo":"indirizzo completo con CAP e città","telefono":"numero di telefono","sito":"sito web senza https://"}`
-        }]
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMsg }]
       })
     });
 
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      console.log('API error:', resp.status, err?.error?.message);
+    if (!r1.ok) {
+      const e = await r1.json().catch(()=>({}));
+      console.log('API error t1:', r1.status, e?.error?.message);
       return;
     }
 
-    const data = await resp.json();
-    let text = '';
-    for (const block of (data.content || [])) {
-      if (block.type === 'text') text += block.text;
+    const d1 = await r1.json();
+    console.log('Turn 1 stop_reason:', d1.stop_reason, 'blocks:', d1.content?.map(b=>b.type));
+
+    // Se il modello ha usato il tool → serve il turno 2
+    if (d1.stop_reason === 'tool_use') {
+      const toolUseBlocks = d1.content.filter(b => b.type === 'tool_use');
+
+      // Costruisci i tool_result (ogni tool_use ha un id)
+      const toolResults = toolUseBlocks.map(b => ({
+        type: 'tool_result',
+        tool_use_id: b.id,
+        content: b.input?.query ? `Searching for: ${b.input.query}` : 'search performed'
+      }));
+
+      // ── Turno 2: invia risultati tool e ottieni risposta finale ──
+      const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 800,
+          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+          system: systemPrompt,
+          messages: [
+            { role: 'user', content: userMsg },
+            { role: 'assistant', content: d1.content },
+            { role: 'user', content: toolResults }
+          ]
+        })
+      });
+
+      if (!r2.ok) { console.log('API error t2:', r2.status); return; }
+      const d2 = await r2.json();
+      console.log('Turn 2 content:', d2.content?.map(b=>b.type));
+      parseAndApply(d2.content, contact, forceOverwrite);
+
+    } else {
+      // Risposta diretta senza tool use
+      parseAndApply(d1.content, contact, forceOverwrite);
     }
 
-    const start = text.indexOf('{'), end = text.lastIndexOf('}');
-    if (start < 0 || end <= start) { console.log('No JSON in response:', text.slice(0,200)); return; }
-
-    const found = JSON.parse(text.slice(start, end+1));
-    console.log('Enrich result:', found);
-
-    if (found.descrizione?.length > 5 && (forceOverwrite || !contact.note))
-      contact.note = found.descrizione;
-    if (found.settore?.length > 2 && (forceOverwrite || !contact.settore))
-      contact.settore = found.settore;
-    if (found.indirizzo?.length > 5 && (forceOverwrite || !contact.indirizzo))
-      contact.indirizzo = found.indirizzo;
-    if (found.telefono?.length > 5 && (forceOverwrite || !contact.telefono))
-      contact.telefono = found.telefono;
-    if (found.sito?.length > 3 && (forceOverwrite || !contact.sito))
-      contact.sito = found.sito;
-
   } catch(e) { console.log('Enrich error:', e.message); }
+}
+
+// Estrae JSON dalla risposta e aggiorna il contatto
+function parseAndApply(blocks, contact, forceOverwrite) {
+  let text = '';
+  for (const b of (blocks || [])) {
+    if (b.type === 'text') text += b.text;
+    // Cerca anche nei tool_result
+    if (b.type === 'tool_result' && Array.isArray(b.content)) {
+      for (const c of b.content) { if (c.type === 'text') text += c.text; }
+    }
+  }
+  console.log('Parse text:', text.slice(0, 300));
+
+  const start = text.indexOf('{'), end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) { console.log('No JSON found'); return; }
+
+  try {
+    const found = JSON.parse(text.slice(start, end+1));
+    console.log('Found:', found);
+    if (found.descrizione?.length > 5  && (forceOverwrite || !contact.note))      contact.note      = found.descrizione;
+    if (found.settore?.length > 2      && (forceOverwrite || !contact.settore))   contact.settore   = found.settore;
+    if (found.indirizzo?.length > 5    && (forceOverwrite || !contact.indirizzo)) contact.indirizzo = found.indirizzo;
+    if (found.telefono?.length > 5     && (forceOverwrite || !contact.telefono))  contact.telefono  = found.telefono;
+    if (found.sito?.length > 3         && (forceOverwrite || !contact.sito))      contact.sito      = found.sito;
+  } catch(e) { console.log('JSON parse error:', e.message, text.slice(start, end+1)); }
 }
 
 // Scarica HTML del sito (usato solo se api.anthropic.com non disponibile)
