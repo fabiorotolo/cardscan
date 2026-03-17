@@ -127,7 +127,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 <!-- ① CAMERA -->
 <div id="scrCamera" class="screen hide">
   <div class="hdr">
-    <div class="hdr-logo">CARDSCAN <span style="font-size:9px;color:var(--dim);letter-spacing:1px">v2.3</span></div>
+    <div class="hdr-logo">CARDSCAN <span style="font-size:9px;color:var(--dim);letter-spacing:1px">v2.4</span></div>
     <div style="display:flex;gap:10px;align-items:center">
       <div class="tag" id="camTag">PASSO 1 / 2</div>
       <button onclick="openSettings()" style="background:none;border:none;cursor:pointer;padding:4px;color:var(--dim);font-size:18px;-webkit-tap-highlight-color:transparent" title="Impostazioni">⚙️</button>
@@ -352,6 +352,8 @@ let cards = {
 
 // Dimensioni del display al momento dello scatto (usate in detectOnFrozen)
 let captureDisplayW = 0, captureDisplayH = 0;
+// Debug: ROI usato nell'ultimo rilevamento (in coords adjCanvas)
+let debugRoi = null;
 
 // Corners in display coords dell'adjCanvas [TL,TR,BR,BL]
 let corners  = null;
@@ -643,152 +645,130 @@ function detectOnFrozen() {
   const gx_d = mh;
   const gy_d = (map.dh - gh_d) / 2;
 
-  // Se OpenCV non è pronto, usa direttamente il riquadro guida come fallback
-  if (!cvReady || typeof cv === 'undefined') {
-    const { rw, rh, ox, oy } = getBox();
-    const iw = $capCanvas.width, ih = $capCanvas.height;
-    const clamp = p => ({ x: Math.max(ox+1,Math.min(ox+rw-1,p.x)), y: Math.max(oy+1,Math.min(oy+rh-1,p.y)) });
-    const d2adj = (dx,dy) => { const vx=map.cropX+dx/map.scale, vy=map.cropY+dy/map.scale; return clamp({x:vx*(rw/map.vw)+ox,y:vy*(rh/map.vh)+oy}); };
-    corners = [ d2adj(gx_d,gy_d), d2adj(gx_d+gw_d,gy_d), d2adj(gx_d+gw_d,gy_d+gh_d), d2adj(gx_d,gy_d+gh_d) ];
-    setSt($adjSt, 'TRASCINA GLI ANGOLI PER AGGIUSTARE (RILEVAMENTO AUTO NON DISPONIBILE)', 'warn');
+  // Fallback senza OpenCV
+  if (!cvReady || typeof cv === 'undefined' || !cv.imread) {
+    setSt($adjSt, 'OPENCV NON PRONTO — SPOSTA ANGOLI MANUALMENTE', 'warn');
+    setGuideCorners(map, gx_d, gy_d, gw_d, gh_d);
     drawAdj(null);
     return;
   }
 
-  // Converti in coordinate video (frame catturato)
-  const vx = Math.max(0, Math.round(map.cropX + gx_d / map.scale));
-  const vy = Math.max(0, Math.round(map.cropY + gy_d / map.scale));
-  const vw = Math.min($capCanvas.width  - vx, Math.round(gw_d / map.scale));
-  const vh = Math.min($capCanvas.height - vy, Math.round(gh_d / map.scale));
+  // Converti ROI in coordinate video
+  const rx  = Math.max(0, Math.round(map.cropX + gx_d / map.scale));
+  const ry  = Math.max(0, Math.round(map.cropY + gy_d / map.scale));
+  const rvw = Math.min($capCanvas.width  - rx, Math.round(gw_d / map.scale));
+  const rvh = Math.min($capCanvas.height - ry, Math.round(gh_d / map.scale));
 
-  let src=null, cropped=null, gray=null, blurred=null, edges=null, contours=null, hierarchy=null;
   let bestCorners = null;
 
+  // Lista di tutti i Mat da liberare alla fine
+  let src=null, roiMat=null, gray=null, blurred=null;
+
   try {
-    src = cv.imread($capCanvas);
+    src     = cv.imread($capCanvas);
+    roiMat  = src.roi(new cv.Rect(rx, ry, rvw, rvh));
+    gray    = new cv.Mat();
+    blurred = new cv.Mat();
 
-    // ── Inset del 2% per non includere i pixel di bordo del ROI stesso ──
-    const INSET = Math.round(Math.min(vw, vh) * 0.02);
-    const rvx = vx + INSET, rvy = vy + INSET;
-    const rvw = vw - INSET * 2, rvh = vh - INSET * 2;
-    cropped = src.roi(new cv.Rect(rvx, rvy, rvw, rvh));
-
-    gray      = new cv.Mat();
-    blurred   = new cv.Mat();
-    edges     = new cv.Mat();
-    contours  = new cv.MatVector();
-    hierarchy = new cv.Mat();
-
-    cv.cvtColor(cropped, gray, cv.COLOR_RGBA2GRAY);
+    cv.cvtColor(roiMat, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
 
-    const eq = new cv.Mat();
-    cv.equalizeHist(blurred, eq);
+    let bestArea = 0;
 
-    // Funzione helper: cerca miglior quadrilatero in una mappa edge
-    const findBestQuad = (edgeMat) => {
-      const k = cv.Mat.ones(3, 3, cv.CV_8U);
-      const closed = new cv.Mat();
-      cv.dilate(edgeMat, closed, k);
-      cv.morphologyEx(closed, closed, cv.MORPH_CLOSE, k);
-      k.delete();
+    // 4 passate Canny con soglie crescenti — più passate = più chance
+    for (const [lo, hi] of [[10,30],[25,75],[45,130],[70,180]]) {
+      let edges=null, kernel=null, dilated=null, ctrs=null, hier=null;
+      try {
+        edges   = new cv.Mat();
+        kernel  = cv.Mat.ones(3, 3, cv.CV_8U);
+        dilated = new cv.Mat();
+        ctrs    = new cv.MatVector();
+        hier    = new cv.Mat();
 
-      const ctrs = new cv.MatVector();
-      const hier = new cv.Mat();
-      cv.findContours(closed, ctrs, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-      closed.delete(); hier.delete();
+        cv.Canny(blurred, edges, lo, hi);
+        cv.dilate(edges, dilated, kernel);
 
-      let best = null, bestScore = 0;
-      for (let i = 0; i < ctrs.size(); i++) {
-        const cnt  = ctrs.get(i);
-        const peri = cv.arcLength(cnt, true);
-        const approx = new cv.Mat();
-        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+        cv.findContours(dilated, ctrs, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-        if (approx.rows === 4) {
-          const area = cv.contourArea(approx);
-          // Area tra 5% e 98% del ROI, prendi il più grande
-          if (area > bestScore && area > rvw * rvh * 0.05 && area < rvw * rvh * 0.98) {
-            bestScore = area;
-            if (best) best.delete();
-            best = approx.clone();
+        for (let i = 0; i < ctrs.size(); i++) {
+          const cnt = ctrs.get(i);
+          const peri = cv.arcLength(cnt, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+          cnt.delete();
+
+          if (approx.rows === 4) {
+            const area = cv.contourArea(approx);
+            // Tra 4% e 98% dell'area ROI
+            if (area > bestArea && area > rvw * rvh * 0.04 && area < rvw * rvh * 0.98) {
+              bestArea = area;
+              // Converti subito in bestCorners (così non teniamo approx vivo)
+              const pts = [];
+              for (let j = 0; j < 4; j++) {
+                pts.push({ x: approx.data32S[j*2] + rx, y: approx.data32S[j*2+1] + ry });
+              }
+              bestCorners = pts;
+            }
           }
+          approx.delete();
         }
-        approx.delete();
-        cnt.delete();
+      } finally {
+        [edges, kernel, dilated, ctrs, hier]
+          .forEach(m => { try { if(m) m.delete(); } catch(_){} });
       }
-      ctrs.delete();
-      return { quad: best, area: bestScore };
-    };
 
-    let best = null, maxArea = 0;
-
-    // — Strategia 1: multi-pass Canny su immagine equalizzata —
-    for (const [lo, hi] of [[20,60],[40,120],[70,180]]) {
-      cv.Canny(eq, edges, lo, hi);
-      const { quad, area } = findBestQuad(edges);
-      if (quad && area > maxArea) {
-        if (best) best.delete();
-        best = quad; maxArea = area;
-      } else if (quad) { quad.delete(); }
-      if (best && maxArea > rvw * rvh * 0.20) break;
+      // Se abbiamo già un buon risultato (>20% ROI) ci fermiamo
+      if (bestCorners && bestArea > rvw * rvh * 0.20) break;
     }
 
-    // — Strategia 2: threshold adattivo (funziona bene su biglietti scuri) —
-    if (!best || maxArea < rvw * rvh * 0.10) {
-      const adap = new cv.Mat();
-      cv.adaptiveThreshold(blurred, adap, 255,
-        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 4);
-      // Inverti: vogliamo bordi chiari su sfondo scuro
-      cv.bitwise_not(adap, adap);
-      const { quad, area } = findBestQuad(adap);
-      adap.delete();
-      if (quad && area > maxArea) {
-        if (best) best.delete();
-        best = quad; maxArea = area;
-      } else if (quad) { quad.delete(); }
-    }
+  } catch(e) {
+    console.error('CV detect error:', e);
+    setSt($adjSt, 'ERRORE CV: ' + (e.message||'').slice(0,50), 'warn');
+  } finally {
+    [src, roiMat, gray, blurred]
+      .forEach(m => { try { if(m) m.delete(); } catch(_){} });
+  }
 
-    eq.delete();
-
-    if (best) {
-      bestCorners = [];
-      for (let i = 0; i < 4; i++) {
-        bestCorners.push({
-          x: best.data32S[i*2]   + rvx,
-          y: best.data32S[i*2+1] + rvy
-        });
-      }
-      best.delete();
-    }
-
-  } catch(e) { console.error('CV detect error:', e); }
-  finally { [src, cropped, gray, blurred, edges, contours, hierarchy]
-    .forEach(m => { try { if(m) m.delete(); } catch(_){} }); }
-
-  // Converti video coords → adjCanvas coords
-  const { rw, rh, ox, oy } = getBox();
-  const iw = $capCanvas.width, ih = $capCanvas.height;
-
-  const clamp = p => ({
-    x: Math.max(ox+1, Math.min(ox+rw-1, p.x * (rw/iw) + ox)),
-    y: Math.max(oy+1, Math.min(oy+rh-1, p.y * (rh/ih) + oy))
+  // Converti coordinate video → adjCanvas
+  const box = getBox();
+  const toAdj = p => ({
+    x: Math.max(box.ox+1, Math.min(box.ox+box.rw-1, p.x * (box.rw / $capCanvas.width)  + box.ox)),
+    y: Math.max(box.oy+1, Math.min(box.oy+box.rh-1, p.y * (box.rh / $capCanvas.height) + box.oy))
   });
 
+  // Salva ROI in coords canvas per debug visivo
+  debugRoi = {
+    x: toAdj({x: rx,      y: ry     }).x,
+    y: toAdj({x: rx,      y: ry     }).y,
+    x2: toAdj({x: rx+rvw, y: ry+rvh }).x,
+    y2: toAdj({x: rx+rvw, y: ry+rvh }).y
+  };
+
   if (bestCorners) {
-    corners = orderPts(bestCorners).map(clamp);
-    setSt($adjSt, 'BORDI RILEVATI — TRASCINA GLI ANGOLI PER AGGIUSTARE', 'ok');
+    corners = orderPts(bestCorners).map(toAdj);
+    setSt($adjSt, 'BORDI RILEVATI ✓ — TRASCINA ANGOLI SE NECESSARIO', 'ok');
   } else {
-    // Fallback: posiziona angoli sul riquadro guida
-    corners = [
-      { x: vx,    y: vy    },
-      { x: vx+vw, y: vy    },
-      { x: vx+vw, y: vy+vh },
-      { x: vx,    y: vy+vh }
-    ].map(clamp);
-    setSt($adjSt, 'BORDI NON TROVATI — SPOSTA GLI ANGOLI MANUALMENTE', 'warn');
+    // Fallback: riquadro guida, mostrando dimensioni ROI per debug
+    setGuideCorners(map, gx_d, gy_d, gw_d, gh_d);
+    setSt($adjSt, `NON TROVATO [ROI ${rvw}×${rvh} px] — SPOSTA ANGOLI`, 'warn');
   }
   drawAdj(null);
+}
+
+// Posiziona angoli sul riquadro guida (usato come fallback)
+function setGuideCorners(map, gx_d, gy_d, gw_d, gh_d) {
+  const box = getBox();
+  // Coordinate video dei 4 angoli del riquadro guida
+  const pts = [
+    { x: map.cropX + gx_d       / map.scale, y: map.cropY + gy_d        / map.scale },
+    { x: map.cropX + (gx_d+gw_d)/ map.scale, y: map.cropY + gy_d        / map.scale },
+    { x: map.cropX + (gx_d+gw_d)/ map.scale, y: map.cropY + (gy_d+gh_d) / map.scale },
+    { x: map.cropX + gx_d       / map.scale, y: map.cropY + (gy_d+gh_d) / map.scale }
+  ];
+  corners = pts.map(p => ({
+    x: Math.max(box.ox+1, Math.min(box.ox+box.rw-1, p.x * (box.rw / $capCanvas.width)  + box.ox)),
+    y: Math.max(box.oy+1, Math.min(box.oy+box.rh-1, p.y * (box.rh / $capCanvas.height) + box.oy))
+  }));
 }
 
 /* letterbox helper */
@@ -854,6 +834,18 @@ function drawAdj(loupePos) {
   corners.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
   ctx.closePath(); ctx.fill();
   ctx.restore();
+
+  // DEBUG: mostra il rettangolo ROI usato per la detection (giallo tratteggiato)
+  if (debugRoi) {
+    const dr = debugRoi;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,220,0,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(dr.x, dr.y, dr.x2 - dr.x, dr.y2 - dr.y);
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
 
   // Bordo poligono
   ctx.beginPath();
