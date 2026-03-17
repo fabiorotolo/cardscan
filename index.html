@@ -494,7 +494,7 @@ function drawGuide() {
   ctx.clearRect(0, 0, W, H);
 
   // Rettangolo guida proporzionato biglietto (rapporto 1.75 : 1)
-  const mh = W * 0.08;
+  const mh = W * 0.05;
   const gw = W - mh * 2;
   const gh = Math.round(gw / 1.75);
   const gx = mh;
@@ -626,7 +626,7 @@ function detectOnFrozen() {
   const map = getVideoCoverMap();
 
   // Rettangolo guida in coordinate display
-  const mh   = map.dw * 0.08;
+  const mh   = map.dw * 0.05;
   const gw_d = map.dw - mh * 2;
   const gh_d = gw_d / 1.75;
   const gx_d = mh;
@@ -695,7 +695,8 @@ function detectOnFrozen() {
 
         if (approx.rows === 4) {
           const area = cv.contourArea(approx);
-          if (area > maxArea && area > vw * vh * 0.05) {
+          // Min 5% del ROI, max 90%: evita di agganciare i bordi stessi del rettangolo guida
+          if (area > maxArea && area > vw * vh * 0.05 && area < vw * vh * 0.90) {
             maxArea = area;
             if (best) best.delete();
             best = approx.clone();
@@ -705,9 +706,9 @@ function detectOnFrozen() {
         cnt.delete();
       }
 
-      eq.delete();
       if (best && maxArea > vw * vh * 0.15) break;
     }
+    eq.delete(); // SPOSTATO fuori dal loop: eq serve in tutte le iterazioni Canny
 
     if (best) {
       // Aggiungi offset ROI → coordinate frame video intero
@@ -724,6 +725,17 @@ function detectOnFrozen() {
   } catch(e) { console.error('CV:', e); }
   finally { [src, cropped, gray, blurred, edges, contours, hierarchy]
     .forEach(m => { try { if(m) m.delete(); } catch(_){} }); }
+
+  // Scarta bestCorners se gli angoli sono troppo vicini ai bordi del ROI
+  // (significa che ha agganciato il rettangolo guida stesso, non il biglietto)
+  if (bestCorners) {
+    const edgeMargin = Math.min(vw, vh) * 0.06; // 6% del lato minore del ROI
+    const hugging = bestCorners.some(c =>
+      c.x - vx < edgeMargin || (vx + vw) - c.x < edgeMargin ||
+      c.y - vy < edgeMargin || (vy + vh) - c.y < edgeMargin
+    );
+    if (hugging) { bestCorners = null; }
+  }
 
   // Converti video coords → adjCanvas coords
   const { rw, rh, ox, oy } = getBox();
