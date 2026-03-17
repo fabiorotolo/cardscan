@@ -127,7 +127,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 <!-- ① CAMERA -->
 <div id="scrCamera" class="screen hide">
   <div class="hdr">
-    <div class="hdr-logo">CARDSCAN</div>
+    <div class="hdr-logo">CARDSCAN <span style="font-size:9px;color:var(--dim);letter-spacing:1px">v2.3</span></div>
     <div style="display:flex;gap:10px;align-items:center">
       <div class="tag" id="camTag">PASSO 1 / 2</div>
       <button onclick="openSettings()" style="background:none;border:none;cursor:pointer;padding:4px;color:var(--dim);font-size:18px;-webkit-tap-highlight-color:transparent" title="Impostazioni">⚙️</button>
@@ -561,9 +561,11 @@ function onShoot() {
   $capCanvas.height = vh;
   $capCanvas.getContext('2d').drawImage($video, 0, 0);
 
-  // Salva le dimensioni display al momento dello scatto
-  captureDisplayW = $video.clientWidth  || window.innerWidth;
-  captureDisplayH = $video.clientHeight || ($camCanvas.height);
+  // Salva le dimensioni REALI dell'area camera al momento dello scatto
+  // (getBoundingClientRect è affidabile anche su iOS, a differenza di video.clientWidth)
+  const camRect = document.getElementById('camArea').getBoundingClientRect();
+  captureDisplayW = camRect.width  || window.innerWidth;
+  captureDisplayH = camRect.height || (window.innerHeight - 200);
 
   // Salva copia intera
   const full = document.createElement('canvas');
@@ -665,52 +667,49 @@ function detectOnFrozen() {
   try {
     src = cv.imread($capCanvas);
 
-    // ── Lavora SOLO dentro il rettangolo guida, con un piccolo inset ──
-    // L'inset evita che il confine del crop stesso crei bordi artificiali nel Canny
-    const INSET = Math.round(Math.min(vw, vh) * 0.03); // 3% del lato minore
+    // ── Inset del 2% per non includere i pixel di bordo del ROI stesso ──
+    const INSET = Math.round(Math.min(vw, vh) * 0.02);
     const rvx = vx + INSET, rvy = vy + INSET;
     const rvw = vw - INSET * 2, rvh = vh - INSET * 2;
-    const roiRect = new cv.Rect(rvx, rvy, rvw, rvh);
-    cropped = src.roi(roiRect);
+    cropped = src.roi(new cv.Rect(rvx, rvy, rvw, rvh));
 
-    gray     = new cv.Mat();
-    blurred  = new cv.Mat();
-    edges    = new cv.Mat();
-    contours = new cv.MatVector();
-    hierarchy= new cv.Mat();
+    gray      = new cv.Mat();
+    blurred   = new cv.Mat();
+    edges     = new cv.Mat();
+    contours  = new cv.MatVector();
+    hierarchy = new cv.Mat();
 
     cv.cvtColor(cropped, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
 
-    // Equalizza per migliorare contrasto bordi
     const eq = new cv.Mat();
     cv.equalizeHist(blurred, eq);
 
-    // Multi-pass Canny
-    let best = null, maxArea = 0;
-
-    for (const [lo, hi] of [[30,90],[60,150],[90,210]]) {
-      cv.Canny(eq, edges, lo, hi);
-
-      // Dilata per chiudere bordi aperti
+    // Funzione helper: cerca miglior quadrilatero in una mappa edge
+    const findBestQuad = (edgeMat) => {
       const k = cv.Mat.ones(3, 3, cv.CV_8U);
-      cv.dilate(edges, edges, k);
-      cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, k);
+      const closed = new cv.Mat();
+      cv.dilate(edgeMat, closed, k);
+      cv.morphologyEx(closed, closed, cv.MORPH_CLOSE, k);
       k.delete();
 
-      cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      const ctrs = new cv.MatVector();
+      const hier = new cv.Mat();
+      cv.findContours(closed, ctrs, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      closed.delete(); hier.delete();
 
-      for (let i = 0; i < contours.size(); i++) {
-        const cnt  = contours.get(i);
+      let best = null, bestScore = 0;
+      for (let i = 0; i < ctrs.size(); i++) {
+        const cnt  = ctrs.get(i);
         const peri = cv.arcLength(cnt, true);
         const approx = new cv.Mat();
         cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
 
         if (approx.rows === 4) {
           const area = cv.contourArea(approx);
-          // Min 5% del ROI inset, max 95% (evita di agganciare i bordi del crop)
-          if (area > maxArea && area > rvw * rvh * 0.05 && area < rvw * rvh * 0.95) {
-            maxArea = area;
+          // Area tra 5% e 98% del ROI, prendi il più grande
+          if (area > bestScore && area > rvw * rvh * 0.05 && area < rvw * rvh * 0.98) {
+            bestScore = area;
             if (best) best.delete();
             best = approx.clone();
           }
@@ -718,13 +717,41 @@ function detectOnFrozen() {
         approx.delete();
         cnt.delete();
       }
+      ctrs.delete();
+      return { quad: best, area: bestScore };
+    };
 
-      if (best && maxArea > rvw * rvh * 0.15) break;
+    let best = null, maxArea = 0;
+
+    // — Strategia 1: multi-pass Canny su immagine equalizzata —
+    for (const [lo, hi] of [[20,60],[40,120],[70,180]]) {
+      cv.Canny(eq, edges, lo, hi);
+      const { quad, area } = findBestQuad(edges);
+      if (quad && area > maxArea) {
+        if (best) best.delete();
+        best = quad; maxArea = area;
+      } else if (quad) { quad.delete(); }
+      if (best && maxArea > rvw * rvh * 0.20) break;
     }
-    eq.delete(); // SPOSTATO fuori dal loop: eq serve in tutte le iterazioni Canny
+
+    // — Strategia 2: threshold adattivo (funziona bene su biglietti scuri) —
+    if (!best || maxArea < rvw * rvh * 0.10) {
+      const adap = new cv.Mat();
+      cv.adaptiveThreshold(blurred, adap, 255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 4);
+      // Inverti: vogliamo bordi chiari su sfondo scuro
+      cv.bitwise_not(adap, adap);
+      const { quad, area } = findBestQuad(adap);
+      adap.delete();
+      if (quad && area > maxArea) {
+        if (best) best.delete();
+        best = quad; maxArea = area;
+      } else if (quad) { quad.delete(); }
+    }
+
+    eq.delete();
 
     if (best) {
-      // Aggiungi offset ROI inset → coordinate frame video intero
       bestCorners = [];
       for (let i = 0; i < 4; i++) {
         bestCorners.push({
@@ -735,7 +762,7 @@ function detectOnFrozen() {
       best.delete();
     }
 
-  } catch(e) { console.error('CV:', e); }
+  } catch(e) { console.error('CV detect error:', e); }
   finally { [src, cropped, gray, blurred, edges, contours, hierarchy]
     .forEach(m => { try { if(m) m.delete(); } catch(_){} }); }
 
