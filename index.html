@@ -127,7 +127,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 <!-- ① CAMERA -->
 <div id="scrCamera" class="screen hide">
   <div class="hdr">
-    <div class="hdr-logo">CARDSCAN <span style="font-size:9px;color:var(--dim);letter-spacing:1px">v2.4</span></div>
+    <div class="hdr-logo">CARDSCAN <span style="font-size:9px;color:var(--dim);letter-spacing:1px">v2.5</span></div>
     <div style="display:flex;gap:10px;align-items:center">
       <div class="tag" id="camTag">PASSO 1 / 2</div>
       <button onclick="openSettings()" style="background:none;border:none;cursor:pointer;padding:4px;color:var(--dim);font-size:18px;-webkit-tap-highlight-color:transparent" title="Impostazioni">⚙️</button>
@@ -137,6 +137,16 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   <div class="cam-area" id="camArea">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="camCanvas"></canvas>
+    <!-- Pulsante orientamento sovrapposto -->
+    <button id="orientBtn" onclick="toggleOrientation()"
+      style="position:absolute;bottom:14px;right:14px;z-index:10;
+        background:rgba(26,28,37,0.82);border:1px solid var(--accent);
+        color:var(--accent);font-family:'Courier New';font-size:11px;
+        letter-spacing:2px;padding:8px 14px;cursor:pointer;
+        -webkit-tap-highlight-color:transparent;
+        backdrop-filter:blur(4px)">
+      ⇄ ORIZZONTALE
+    </button>
   </div>
   <div class="panel">
     <div class="thumbs">
@@ -344,6 +354,7 @@ let cvReady = false;
 let stream   = null;
 let camRaf   = null;
 let step     = 'front'; // 'front' | 'back'
+let guideOrientation = 'landscape'; // 'landscape' | 'portrait'
 
 let cards = {
   front: { full: null, corners: null, cropped: null },
@@ -493,17 +504,35 @@ function syncCanvas(canvas, parent) {
   }
 }
 
+// Calcola rettangolo guida in coordinate display — usato sia da drawGuide che da detectOnFrozen
+function getGuideRect(W, H) {
+  const RATIO = 1.75; // rapporto biglietto standard
+  if (guideOrientation === 'landscape') {
+    const mh = W * 0.05;
+    const gw = W - mh * 2;
+    const gh = Math.round(gw / RATIO);
+    return { gx: mh, gy: Math.round((H - gh) / 2), gw, gh };
+  } else {
+    // Portrait: ruotiamo le proporzioni
+    const mw = H * 0.05;
+    const gh = H - mw * 2;
+    const gw = Math.round(gh / RATIO);
+    return { gx: Math.round((W - gw) / 2), gy: mw, gw, gh };
+  }
+}
+
+function toggleOrientation() {
+  guideOrientation = guideOrientation === 'landscape' ? 'portrait' : 'landscape';
+  const btn = document.getElementById('orientBtn');
+  btn.textContent = guideOrientation === 'landscape' ? '⇄ ORIZZONTALE' : '↕ VERTICALE';
+}
+
 function drawGuide() {
   const W = $camCanvas.width, H = $camCanvas.height;
   const ctx = $camCtx;
   ctx.clearRect(0, 0, W, H);
 
-  // Rettangolo guida proporzionato biglietto (rapporto 1.75 : 1)
-  const mh = W * 0.05;
-  const gw = W - mh * 2;
-  const gh = Math.round(gw / 1.75);
-  const gx = mh;
-  const gy = Math.round((H - gh) / 2);
+  const { gx, gy, gw, gh } = getGuideRect(W, H);
 
   // Oscura esterno
   ctx.fillStyle = 'rgba(0,0,0,0.42)';
@@ -638,12 +667,8 @@ function getVideoCoverMap() {
 function detectOnFrozen() {
   const map = getVideoCoverMap();
 
-  // Rettangolo guida in coordinate display
-  const mh   = map.dw * 0.05;
-  const gw_d = map.dw - mh * 2;
-  const gh_d = gw_d / 1.75;
-  const gx_d = mh;
-  const gy_d = (map.dh - gh_d) / 2;
+  // Rettangolo guida in coordinate display — stesso calcolo di drawGuide
+  const { gx: gx_d, gy: gy_d, gw: gw_d, gh: gh_d } = getGuideRect(map.dw, map.dh);
 
   // Fallback senza OpenCV
   if (!cvReady || typeof cv === 'undefined' || !cv.imread) {
