@@ -350,6 +350,9 @@ let cards = {
   back:  { full: null, corners: null, cropped: null }
 };
 
+// Dimensioni del display al momento dello scatto (usate in detectOnFrozen)
+let captureDisplayW = 0, captureDisplayH = 0;
+
 // Corners in display coords dell'adjCanvas [TL,TR,BR,BL]
 let corners  = null;
 let dragIdx  = -1, dragOX = 0, dragOY = 0;
@@ -558,6 +561,10 @@ function onShoot() {
   $capCanvas.height = vh;
   $capCanvas.getContext('2d').drawImage($video, 0, 0);
 
+  // Salva le dimensioni display al momento dello scatto
+  captureDisplayW = $video.clientWidth  || window.innerWidth;
+  captureDisplayH = $video.clientHeight || ($camCanvas.height);
+
   // Salva copia intera
   const full = document.createElement('canvas');
   full.width = vw; full.height = vh;
@@ -612,8 +619,10 @@ function showAdjust(editing) {
    DETECT SUL FERMO IMMAGINE
 ═══════════════════════════════════════ */
 function getVideoCoverMap() {
-  const dw = $video.clientWidth  || window.innerWidth;
-  const dh = $video.clientHeight || (window.innerHeight - 200);
+  // Usa le dimensioni salvate al momento dello scatto, non quelle live del video
+  // (quando siamo in adjust, il video potrebbe non essere visibile e dare 0)
+  const dw = captureDisplayW || $video.clientWidth  || window.innerWidth;
+  const dh = captureDisplayH || $video.clientHeight || (window.innerHeight - 200);
   const vw = $capCanvas.width;
   const vh = $capCanvas.height;
   const scale = Math.max(dw / vw, dh / vh);
@@ -656,8 +665,12 @@ function detectOnFrozen() {
   try {
     src = cv.imread($capCanvas);
 
-    // ── Lavora SOLO dentro il rettangolo guida ──
-    const roiRect = new cv.Rect(vx, vy, vw, vh);
+    // ── Lavora SOLO dentro il rettangolo guida, con un piccolo inset ──
+    // L'inset evita che il confine del crop stesso crei bordi artificiali nel Canny
+    const INSET = Math.round(Math.min(vw, vh) * 0.03); // 3% del lato minore
+    const rvx = vx + INSET, rvy = vy + INSET;
+    const rvw = vw - INSET * 2, rvh = vh - INSET * 2;
+    const roiRect = new cv.Rect(rvx, rvy, rvw, rvh);
     cropped = src.roi(roiRect);
 
     gray     = new cv.Mat();
@@ -695,8 +708,8 @@ function detectOnFrozen() {
 
         if (approx.rows === 4) {
           const area = cv.contourArea(approx);
-          // Min 5% del ROI, max 90%: evita di agganciare i bordi stessi del rettangolo guida
-          if (area > maxArea && area > vw * vh * 0.05 && area < vw * vh * 0.90) {
+          // Min 5% del ROI inset, max 95% (evita di agganciare i bordi del crop)
+          if (area > maxArea && area > rvw * rvh * 0.05 && area < rvw * rvh * 0.95) {
             maxArea = area;
             if (best) best.delete();
             best = approx.clone();
@@ -706,17 +719,17 @@ function detectOnFrozen() {
         cnt.delete();
       }
 
-      if (best && maxArea > vw * vh * 0.15) break;
+      if (best && maxArea > rvw * rvh * 0.15) break;
     }
     eq.delete(); // SPOSTATO fuori dal loop: eq serve in tutte le iterazioni Canny
 
     if (best) {
-      // Aggiungi offset ROI → coordinate frame video intero
+      // Aggiungi offset ROI inset → coordinate frame video intero
       bestCorners = [];
       for (let i = 0; i < 4; i++) {
         bestCorners.push({
-          x: best.data32S[i*2]   + vx,
-          y: best.data32S[i*2+1] + vy
+          x: best.data32S[i*2]   + rvx,
+          y: best.data32S[i*2+1] + rvy
         });
       }
       best.delete();
@@ -725,17 +738,6 @@ function detectOnFrozen() {
   } catch(e) { console.error('CV:', e); }
   finally { [src, cropped, gray, blurred, edges, contours, hierarchy]
     .forEach(m => { try { if(m) m.delete(); } catch(_){} }); }
-
-  // Scarta bestCorners se gli angoli sono troppo vicini ai bordi del ROI
-  // (significa che ha agganciato il rettangolo guida stesso, non il biglietto)
-  if (bestCorners) {
-    const edgeMargin = Math.min(vw, vh) * 0.06; // 6% del lato minore del ROI
-    const hugging = bestCorners.some(c =>
-      c.x - vx < edgeMargin || (vx + vw) - c.x < edgeMargin ||
-      c.y - vy < edgeMargin || (vy + vh) - c.y < edgeMargin
-    );
-    if (hugging) { bestCorners = null; }
-  }
 
   // Converti video coords → adjCanvas coords
   const { rw, rh, ox, oy } = getBox();
